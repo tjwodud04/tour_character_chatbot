@@ -1,6 +1,6 @@
 # search_service.py
 # 질의 → (로컬 임베딩 캐시 조회) → 미스 시 DataService 호출 → 결과 저장(JSONL)
-from typing import List, Dict
+from typing import List, Dict, Optional
 from scripts.config import *
 from scripts.data_service import DataService
 from scripts.embedding_service import EmbeddingService
@@ -19,21 +19,26 @@ class _VecCache:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         # 파일 없으면 생성
         if not os.path.exists(self.path):
-            with open(self.path, "w", encoding="utf-8") as f: pass
+            with open(self.path, "w", encoding="utf-8") as f:
+                pass
 
     def _iter(self):
         with open(self.path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
-                if not line: continue
-                try: yield json.loads(line)
-                except Exception: continue
+                if not line:
+                    continue
+                try:
+                    yield json.loads(line)
+                except Exception:
+                    continue
 
     def search(self, qvec: list[float], top_k=1) -> list[dict]:
         scored = []
         for obj in self._iter():
             vec = obj.get("embedding")
-            if not isinstance(vec, list): continue
+            if not isinstance(vec, list):
+                continue
             sim = _cos_sim(qvec, vec)
             scored.append((sim, obj))
         scored.sort(key=lambda x: x[0], reverse=True)
@@ -51,13 +56,21 @@ class _VecCache:
 
 class SearchService:
     """임베딩 캐시 → 미스 시 DataService 조회"""
-    def __init__(self, openai_api_key: str = None):
-        self.openai_api_key = openai_api_key
-        self.embedder = EmbeddingService()
+    def __init__(self, openai_api_key: Optional[str] = None):
+        self.openai_api_key = (openai_api_key or "").strip()
+        # ✅ EmbeddingService에 키를 주입
+        self.embedder = EmbeddingService(api_key=self.openai_api_key)
         self.cache    = _VecCache(VECTOR_CACHE_PATH, MAX_CACHE_ITEMS)
 
-    def search(self, query: str, top_k: int = None, tour_api_key: str = None, openai_api_key: str = None) -> List[Dict]:
+    def search(
+        self,
+        query: str,
+        top_k: int = None,
+        tour_api_key: str = None,
+        openai_api_key: Optional[str] = None,  # 기존 시그니처 유지
+    ) -> List[Dict]:
         want = top_k or NUM_RECOMMEND
+
         # 1) 캐시 조회
         qv = self.embedder.embed([query])[0]
         hits = self.cache.search(qv, top_k=1)
@@ -66,8 +79,9 @@ class SearchService:
             if sim >= CACHE_SIM_THRESHOLD:
                 cards = hits[0].get("cards") or []
                 return cards[:want]
+
         # 2) 미스 → API 조회 후 저장
-        api_key = openai_api_key or self.openai_api_key
+        api_key = (openai_api_key or self.openai_api_key or "").strip()
         data_svc = DataService(openai_api_key=api_key)
         cards = data_svc.recommend_items(query, want=want, tour_api_key=tour_api_key)
         if cards:

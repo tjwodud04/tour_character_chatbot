@@ -1,4 +1,3 @@
-# scripts/services.py
 import base64
 import asyncio
 import threading
@@ -60,7 +59,7 @@ async def process_chat(req):
         if 'audio' not in req.files:
             return jsonify(error="오디오 파일이 필요합니다."), 400
 
-        api_key = req.headers.get('X-API-KEY')
+        api_key = (req.headers.get('X-API-KEY') or "").strip()
         tour_api_key = req.headers.get('X-TOUR-API-KEY')
         character = req.form.get('character', 'kei')
         client = get_openai_client(api_key)
@@ -69,26 +68,26 @@ async def process_chat(req):
         audio_file = req.files['audio']
         stt_result = await client.audio.transcriptions.create(
             file=("audio.webm", audio_file.read()),
-            model="whisper-1",
+            model="gpt-4o-mini-transcribe", # whisper-1
             response_format="text"
         )
         user_text = stt_result or ""
 
-        # 2) 관광지 검색
-        search_service = SearchService()
-        recommendations = search_service.search(user_text, top_k=5, tour_api_key=tour_api_key, openai_api_key=api_key)
+        # 2) 관광지 검색  ✅ API 키 주입
+        search_service = SearchService(openai_api_key=api_key)
+        recommendations = search_service.search(
+            user_text, top_k=5, tour_api_key=tour_api_key, openai_api_key=api_key
+        )
 
         # 3) 캐릭터 응답 생성
         system_prompt = CHARACTER_SYSTEM_PROMPTS[character]
         with history_lock:
             messages = [{"role": "system", "content": system_prompt}] + conversation_history[-HISTORY_MAX_LEN:]
 
-        # 관광지 추천 컨텍스트 추가
         if recommendations:
             tour_context = "추천된 관광지 정보:\n"
             for i, rec in enumerate(recommendations, 1):
-                tour_context += f"{i}. {rec['name']} - {rec['reason']}\n"
-
+                tour_context += f"{i}. {rec['name']} - {rec.get('reason', '')}\n"
             user_prompt = f"{user_text}\n\n{tour_context}\n\n위 관광지들을 참고해서 친근하게 추천해주세요. 2-3문장으로 간단히 설명해주세요."
         else:
             user_prompt = f"{user_text}\n\n관련 관광지를 찾지 못했습니다. 다른 지역이나 키워드로 다시 물어봐 달라고 안내해주세요."
@@ -102,10 +101,7 @@ async def process_chat(req):
             max_tokens=512,
         )
         ai_text = response.choices[0].message.content or ""
-        ai_text = remove_emojis(ai_text)
-
-        if not ai_text:
-            ai_text = "죄송해요, 답변을 준비하지 못했어요. 다시 한 번 말씀해주시겠어요?"
+        ai_text = remove_emojis(ai_text) or "죄송해요, 답변을 준비하지 못했어요. 다시 한 번 말씀해주시겠어요?"
 
         # 4) TTS 생성
         tts_text = remove_emojis(ai_text)
@@ -158,7 +154,7 @@ async def stream_chat(req):
     if 'audio' not in req.files:
         return jsonify(error="오디오 파일이 필요합니다."), 400
 
-    api_key = req.headers.get('X-API-KEY')
+    api_key = (req.headers.get('X-API-KEY') or "").strip()
     tour_api_key = req.headers.get('X-TOUR-API-KEY')
     character = req.form.get('character', 'kei')
     client = get_openai_client(api_key)
@@ -172,8 +168,8 @@ async def stream_chat(req):
     )
     user_text = stt_result or ""
 
-    # 2) 관광지 검색
-    search_service = SearchService()
+    # 2) 관광지 검색  ✅ API 키 주입
+    search_service = SearchService(openai_api_key=api_key)
     recommendations = search_service.search(user_text, top_k=5, tour_api_key=tour_api_key, openai_api_key=api_key)
 
     # 3) 스트리밍용 메시지 구성
@@ -184,8 +180,7 @@ async def stream_chat(req):
         if recommendations:
             tour_context = "추천된 관광지 정보:\n"
             for i, rec in enumerate(recommendations, 1):
-                tour_context += f"{i}. {rec['name']} - {rec['reason']}\n"
-
+                tour_context += f"{i}. {rec['name']} - {rec.get('reason', '')}\n"
             user_prompt = f"{user_text}\n\n{tour_context}\n\n위 관광지들을 참고해서 친근하게 추천해주세요."
         else:
             user_prompt = f"{user_text}\n\n관련 관광지를 찾지 못했습니다. 다른 키워드로 다시 물어봐 달라고 안내해주세요."
