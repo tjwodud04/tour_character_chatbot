@@ -1,0 +1,53 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "scripts/app.py",
+      "use": "@vercel/python",
+      "config": {
+        "runtime": "python3.11"
+      }
+    },
+    {
+      "src": "front/**",
+      "use": "@vercel/static"
+    },
+    {
+      "src": "model/**",
+      "use": "@vercel/static"
+    },
+    {
+      "src": "api/convert.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/scripts/(.*)",
+      "dest": "scripts/app.py"
+    },
+    {
+      "src": "/model/(.*)",
+      "dest": "/model/$1"
+    },
+    {
+      "src": "/css/(.*)",
+      "dest": "/front/css/$1"
+    },
+    {
+      "src": "/js/(.*)",
+      "dest": "/front/js/$1"
+    },
+    {
+      "handle": "filesystem"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/front/$1"
+    },
+    {
+      "src": "/api/convert",
+      "dest": "api/convert.js"
+    }
+  ]
+}

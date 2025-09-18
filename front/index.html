@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 관광 가이드</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="/css/main.css">
+</head>
+<body>
+    <div class="main-container">
+        <h1 class="title">AI 관광 가이드와 대화하기</h1>
+        <p class="subtitle">한국 여행을 안내해줄 가이드를 선택해주세요</p>
+        <div class="card-container">
+            <a href="kei.html" class="card">
+                <div class="card-profile">
+                    <img src="/model/kei/100px_profile.jpg" alt="Kei 프로필">
+                </div>
+                <div class="card-content">
+                    <h2>Kei와 여행하기</h2>
+                    <p>친근하고 창의적인 한국 관광 가이드</p>
+                </div>
+            </a>
+            <a href="haru.html" class="card">
+                <div class="card-profile">
+                    <img src="/model/haru/100px_profile.jpg" alt="Haru 프로필">
+                </div>
+                <div class="card-content">
+                    <h2>Haru와 여행하기</h2>
+                    <p>전문적이고 체계적인 여행 컨설턴트</p>
+                </div>
+            </a>
+        </div>
+        <div class="api-key-section" style="display: flex; justify-content: flex-end; margin-top: 16px;">
+            <button id="setApiKeyBtn" class="api-key-btn">OpenAI API 키 변경</button>
+        </div>
+    </div>
+
+    <!-- API 키 입력 모달 -->
+    <div id="apiKeyModal" class="modal">
+        <div class="modal-content">
+            <h2>OpenAI API 키 설정</h2>
+            <p>대화를 시작하기 위해 OpenAI API 키를 입력해주세요.</p>
+            <input type="password" id="apiKeyInput" placeholder="sk-..." class="api-key-input">
+            <div class="modal-buttons">
+                <button id="saveApiKey" class="primary-btn">저장</button>
+                <button id="closeModal" class="secondary-btn">취소</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="./js/main.js"></script>
+</body>
+</html>
