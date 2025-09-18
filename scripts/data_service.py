@@ -149,15 +149,19 @@ class DataService:
             cat_list = "\n".join([f"- {c['code']} : {c['name']}" for c in CAT1_CHOICES])
             prompt = f"""
 다음 한국어 요청에서
-1) 지역명 1개(예: 제주, 부산, 강릉)와
+1) 정확한 지역명 1개 (시/도/광역시/특별시 단위)
 2) 아래 목록 중 가장 가까운 대분류 cat1 코드 1개
 를 JSON으로만 출력하세요.
+
+지역명 예시: 제주(제주도), 서울(서울특별시), 부산(부산광역시), 강원(강원도), 경기(경기도)
 
 대분류 목록:
 {cat_list}
 
 출력 스키마:
 {{"region":"제주","cat1":"A01"}}
+
+중요: 지역명은 시/도 단위로만 추출하세요. 구/군/시 단위는 제외하세요.
 
 요청: {user_query}
 """.strip()
@@ -177,6 +181,7 @@ class DataService:
             if not region:
                 t = (user_query or "").strip()
                 region = next((w for w in _REGION_HINTS if w in t), t)
+            print(f"[DEBUG] 추출된 지역: '{region}', 카테고리: '{cat1}', 원본 쿼리: '{user_query}'")
             return region, cat1
         except Exception:
             t = (user_query or "").strip()
@@ -192,9 +197,18 @@ class DataService:
             r = requests.get(url, params=p, timeout=self.timeout); r.raise_for_status()
             items = self._safe_json(r).get("response",{}).get("body",{}).get("items",{}).get("item",[]) or []
             name = (region_name or "").replace("특별자치도","").replace("광역시","").replace("특별시","").strip()
+
+            # 정확한 매칭 우선 시도
             cand = [it for it in items if name and name in (it.get("name") or "")]
-            if not cand and items: cand = items
+
+            # 매칭되지 않으면 None 반환 (잘못된 지역 필터링 방지)
+            if not cand:
+                print(f"[DEBUG] 지역명 '{region_name}' -> 정규화 '{name}' -> 매칭 실패, 지역 필터 없이 검색")
+                return None, None
+
             code = (cand[0].get("code") if cand else None)
+            print(f"[DEBUG] 지역명 '{region_name}' -> 정규화 '{name}' -> 코드 '{code}'")
+            print(f"[DEBUG] 매칭된 지역: {cand[0].get('name', '알 수 없음')}")
             return (str(code) if code else None), None
         except Exception:
             return None, None
@@ -250,9 +264,10 @@ class DataService:
             s = (resp.choices[0].message.content or "").strip()
             s = re.split(r"[.!?。]\s*", s)[0].strip()
             return (s + ".") if s else ""
-        except Exception:
+        except Exception as e:
+            print(f"요약 생성 실패: {e}")
             s = re.split(r"[.!?。]\s*", t)[0].strip()
-            return (s[:40] + ("..." if len(s) > 40 else ""))
+            return (s[:40] + ("..." if len(s) > 40 else "")) if s else "관광지 정보를 확인해보세요."
 
     # --- 3) 목록 정리 휴리스틱(상업매장 제거 등) ---
     def _clean_items(self, items: List[Dict]) -> List[Dict]:
@@ -304,6 +319,8 @@ class DataService:
         if sigungu_code: params["sigunguCode"] = sigungu_code
         if cat1: params["cat1"] = cat1
 
+        print(f"[DEBUG] TourAPI 호출 매개변수: areaCode={area_code}, cat1={cat1}, numOfRows={num_rows}")
+
         items: List[Dict]
         try:
             r = requests.get(url, params=params, timeout=self.timeout)
@@ -330,7 +347,7 @@ class DataService:
             addr  = _compose_full_address((it.get("addr1") or ""), (it.get("addr2") or ""))
 
             overview, homepage = self._fetch_detail_common(cid)
-            reason = self._summarize_one_line(overview) or (overview[:120] + "..." if overview else "")
+            reason = self._summarize_one_line(overview) or (overview[:120] + "..." if overview else "관광지 정보를 확인해보세요.")
 
             img = self._pick_valid_image(
                 cid,

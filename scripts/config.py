@@ -11,7 +11,7 @@ OPENAI_MODEL = "gpt-4o-mini"
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
 
 # 관광지 추천 설정
-NUM_RECOMMEND = 5
+NUM_RECOMMEND = 3
 API_FETCH_MULTIPLIER = 6
 TIMEOUT = 10
 
