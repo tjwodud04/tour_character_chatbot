@@ -298,12 +298,16 @@ class ChatManager {
             formData.append('audio', audioBlob, 'audio.webm');
             formData.append('character', this.characterType);
 
-            const apiKey = localStorage.getItem('openai_api_key');
+            const openaiKey = localStorage.getItem('openai_api_key');
+            const tourKey = localStorage.getItem('tour_api_key');
             console.log('Sending request to server (once)');
             const response = await fetch('/scripts/chat', {
                 method: 'POST',
                 body: formData,
-                headers: { 'X-API-KEY': apiKey || '' }
+                headers: {
+                    'X-API-KEY': openaiKey || '',
+                    'X-TOUR-API-KEY': tourKey || ''
+                }
             });
 
             if (!response.ok) {
@@ -349,13 +353,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     console.log('Initializing application...');
     live2dManager = new Live2DManager();
     audioManager = new AudioManager();
-    chatManager = new ChatManager('kei');
+
+    // URL에서 캐릭터 타입 감지
+    const currentCharacter = window.location.pathname.includes('haru') ? 'haru' : 'kei';
+    chatManager = new ChatManager(currentCharacter);
 
     await live2dManager.initialize();
 
     // 캐릭터 로드 후 0.7초 뒤 안내 멘트
     setTimeout(() => {
-        chatManager.addMessage('ai', '만나서 반가워요. 지금 느끼는 감정이 어떤지 들려줘요.');
+        const greetingMessage = currentCharacter === 'haru'
+            ? '안녕하세요! 저는 여행 컨설턴트 Haru입니다. 한국의 관광지에 대해 궁금한 것이 있으면 언제든 물어보세요!'
+            : '안녕! 나는 Kei야! 한국 여행에 관해 뭐든 물어봐~ 맛집, 관광지, 숙소 다 알려줄게!';
+        chatManager.addMessage('ai', greetingMessage);
     }, 700);
 
     const recordButton = document.getElementById('recordButton');
@@ -440,14 +450,18 @@ async function handleRecording() {
 
 // ====== 스트리밍 송수신: /scripts/chat_stream ======
 async function sendAudioToServerStream(audioBlob, characterType = 'kei') {
-  const apiKey = localStorage.getItem('openai_api_key') || '';
+  const openaiKey = localStorage.getItem('openai_api_key') || '';
+  const tourKey = localStorage.getItem('tour_api_key') || '';
   const formData = new FormData();
   formData.append('audio', audioBlob, 'audio.webm');
   formData.append('character', characterType);
 
   const resp = await fetch('/scripts/chat_stream', {
     method: 'POST',
-    headers: { 'X-API-KEY': apiKey },
+    headers: {
+      'X-API-KEY': openaiKey,
+      'X-TOUR-API-KEY': tourKey
+    },
     body: formData
   });
 

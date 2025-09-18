@@ -181,3 +181,25 @@
 .secondary-btn:hover {
     background-color: #e4e4e4;
 }
+
+/* API 입력 그룹 스타일 */
+.api-input-group {
+    margin-bottom: 20px;
+    text-align: left;
+}
+
+.api-input-group label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: 600;
+    color: #333;
+    font-size: 14px;
+}
+
+.api-input-group small {
+    display: block;
+    margin-top: 3px;
+    color: #666;
+    font-size: 12px;
+    line-height: 1.3;
+}

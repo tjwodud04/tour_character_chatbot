@@ -11,8 +11,6 @@ from urllib.parse import urlparse, unquote
 from openai import OpenAI
 from scripts.config import *
 
-_client = OpenAI(api_key=OPENAI_API_KEY)
-
 CAT1_CHOICES = [
     {"code": "A01", "name": "자연"},
     {"code": "A02", "name": "인문(문화/예술/역사)"},
@@ -118,10 +116,17 @@ class DataService:
         self.api_key = KOREA_TOURISM_API_KEY
         self.timeout = TIMEOUT
         self._img_cache = _ImageCache(IMAGE_CACHE_TTL_SEC, IMAGE_CACHE_MAX)
+        self.client = OpenAI(api_key=OPENAI_API_KEY)
 
     # --- 공용: API 키/JSON ---
     def _api_key(self) -> str:
         k = (self.api_key or "").strip()
+        if "%" in k: k = unquote(k)
+        return k.replace(" ", "")
+
+    def _get_api_key(self, tour_api_key: str = None) -> str:
+        # 전달받은 키가 있으면 사용, 없으면 기본 키 사용
+        k = (tour_api_key or self.api_key or "").strip()
         if "%" in k: k = unquote(k)
         return k.replace(" ", "")
 
@@ -153,7 +158,7 @@ class DataService:
 
 요청: {user_query}
 """.strip()
-            resp = _client.chat.completions.create(
+            resp = self.client.chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=[
                     {"role":"system","content":"반드시 유효한 JSON만 출력하세요."},
@@ -228,7 +233,7 @@ class DataService:
         t = (text or "").strip()
         if not t: return ""
         try:
-            resp = _client.chat.completions.create(
+            resp = self.client.chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=[
                     {"role":"system","content":"한국어 문장 하나로만 답해. 금지어: 요약,정리,한줄,한 문장. 28~48자."},
@@ -273,7 +278,7 @@ class DataService:
         return img
 
     # --- 메인: 추천 아이템 ---
-    def recommend_items(self, user_query: str, want: int = None) -> List[Dict]:
+    def recommend_items(self, user_query: str, want: int = None, tour_api_key: str = None) -> List[Dict]:
         want = want or NUM_RECOMMEND
 
         # (1) 지역/대분류
@@ -284,7 +289,7 @@ class DataService:
         url = f"{self.base_url}/areaBasedList2"
         num_rows = max(80, want * API_FETCH_MULTIPLIER)
         params = {
-            "serviceKey": self._api_key(),
+            "serviceKey": self._get_api_key(tour_api_key),
             "numOfRows": num_rows,
             "pageNo": 1,
             "arrange": "O",  # O/Q/R: 이미지 보장

@@ -61,6 +61,7 @@ async def process_chat(req):
             return jsonify(error="오디오 파일이 필요합니다."), 400
 
         api_key = req.headers.get('X-API-KEY')
+        tour_api_key = req.headers.get('X-TOUR-API-KEY')
         character = req.form.get('character', 'kei')
         client = get_openai_client(api_key)
 
@@ -75,7 +76,7 @@ async def process_chat(req):
 
         # 2) 관광지 검색
         search_service = SearchService()
-        recommendations = search_service.search(user_text, top_k=5)
+        recommendations = search_service.search(user_text, top_k=5, tour_api_key=tour_api_key)
 
         # 3) 캐릭터 응답 생성
         system_prompt = CHARACTER_SYSTEM_PROMPTS[character]
@@ -158,6 +159,7 @@ async def stream_chat(req):
         return jsonify(error="오디오 파일이 필요합니다."), 400
 
     api_key = req.headers.get('X-API-KEY')
+    tour_api_key = req.headers.get('X-TOUR-API-KEY')
     character = req.form.get('character', 'kei')
     client = get_openai_client(api_key)
 
@@ -172,7 +174,7 @@ async def stream_chat(req):
 
     # 2) 관광지 검색
     search_service = SearchService()
-    recommendations = search_service.search(user_text, top_k=5)
+    recommendations = search_service.search(user_text, top_k=5, tour_api_key=tour_api_key)
 
     # 3) 스트리밍용 메시지 구성
     system_prompt = CHARACTER_SYSTEM_PROMPTS[character]

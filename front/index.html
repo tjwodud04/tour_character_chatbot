@@ -32,16 +32,28 @@
             </a>
         </div>
         <div class="api-key-section" style="display: flex; justify-content: flex-end; margin-top: 16px;">
-            <button id="setApiKeyBtn" class="api-key-btn">OpenAI API 키 변경</button>
+            <button id="setApiKeyBtn" class="api-key-btn">API 키 설정</button>
         </div>
     </div>
 
     <!-- API 키 입력 모달 -->
     <div id="apiKeyModal" class="modal">
         <div class="modal-content">
-            <h2>OpenAI API 키 설정</h2>
-            <p>대화를 시작하기 위해 OpenAI API 키를 입력해주세요.</p>
-            <input type="password" id="apiKeyInput" placeholder="sk-..." class="api-key-input">
+            <h2>API 키 설정</h2>
+            <p>관광지 추천 서비스를 이용하기 위해 API 키를 입력해주세요.</p>
+
+            <div class="api-input-group">
+                <label for="openaiKeyInput">OpenAI API 키</label>
+                <input type="password" id="openaiKeyInput" placeholder="sk-..." class="api-key-input">
+                <small>음성 인식 및 대화 생성에 사용됩니다</small>
+            </div>
+
+            <div class="api-input-group">
+                <label for="tourKeyInput">한국관광공사 TourAPI 키</label>
+                <input type="password" id="tourKeyInput" placeholder="TourAPI 키를 입력하세요" class="api-key-input">
+                <small>관광지 정보 검색에 사용됩니다</small>
+            </div>
+
             <div class="modal-buttons">
                 <button id="saveApiKey" class="primary-btn">저장</button>
                 <button id="closeModal" class="secondary-btn">취소</button>

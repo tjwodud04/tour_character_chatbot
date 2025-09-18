@@ -24,44 +24,61 @@ document.addEventListener('DOMContentLoaded', () => {
     const setApiKeyBtn = document.getElementById('setApiKeyBtn');
     const closeModal = document.getElementById('closeModal');
     const saveApiKey = document.getElementById('saveApiKey');
-    const apiKeyInput = document.getElementById('apiKeyInput');
+    const openaiKeyInput = document.getElementById('openaiKeyInput');
+    const tourKeyInput = document.getElementById('tourKeyInput');
 
-    // 저장된 API 키가 있는지 확인
-    function getSavedApiKey() {
+    // API 키 저장/불러오기 함수들
+    function getSavedOpenAIKey() {
         return localStorage.getItem('openai_api_key');
     }
-    function setSavedApiKey(key) {
+    function getSavedTourKey() {
+        return localStorage.getItem('tour_api_key');
+    }
+    function setSavedOpenAIKey(key) {
         localStorage.setItem('openai_api_key', key);
     }
-    let savedApiKey = getSavedApiKey();
-    if (savedApiKey) {
-        setApiKeyBtn.textContent = 'API 키 변경';
+    function setSavedTourKey(key) {
+        localStorage.setItem('tour_api_key', key);
     }
 
-    // 페이지 진입 시 API 키 없으면 모달 자동 오픈
-    if (!savedApiKey) {
+    let savedOpenAIKey = getSavedOpenAIKey();
+    let savedTourKey = getSavedTourKey();
+
+    // 버튼 텍스트 업데이트
+    function updateButtonText() {
+        if (savedOpenAIKey && savedTourKey) {
+            setApiKeyBtn.textContent = 'API 키 변경';
+        } else {
+            setApiKeyBtn.textContent = 'API 키 설정';
+        }
+    }
+    updateButtonText();
+
+    // 페이지 진입 시 API 키 확인
+    function checkApiKeys() {
+        return savedOpenAIKey && savedTourKey;
+    }
+
+    if (!checkApiKeys()) {
         modal.style.display = 'block';
-        // 안내문구 명확히
-        modal.querySelector('h2').textContent = 'OpenAI API Key가 필요합니다.';
-        modal.querySelector('p').textContent = '서비스 이용을 위해 OpenAI API Key를 입력해주세요.';
-    } else {
-        // 안내문구 원래대로(버튼 클릭 시)
-        modal.querySelector('h2').textContent = 'OpenAI API 키 설정';
-        modal.querySelector('p').textContent = '대화를 시작하기 위해 OpenAI API 키를 입력해주세요.';
     }
 
     // 모달 열기
     setApiKeyBtn.addEventListener('click', function() {
         modal.style.display = 'block';
-        savedApiKey = getSavedApiKey();
-        if (savedApiKey) {
-            apiKeyInput.value = savedApiKey;
+
+        // 기존 값 표시
+        if (getSavedOpenAIKey()) {
+            openaiKeyInput.value = getSavedOpenAIKey();
         } else {
-            apiKeyInput.value = '';
+            openaiKeyInput.value = '';
         }
-        // 안내문구 원래대로
-        modal.querySelector('h2').textContent = 'OpenAI API 키 설정';
-        modal.querySelector('p').textContent = '대화를 시작하기 위해 OpenAI API 키를 입력해주세요.';
+
+        if (getSavedTourKey()) {
+            tourKeyInput.value = getSavedTourKey();
+        } else {
+            tourKeyInput.value = '';
+        }
     });
 
     // 모달 닫기
@@ -71,13 +88,29 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // API 키 저장
     saveApiKey.addEventListener('click', function() {
-        const apiKey = apiKeyInput.value.trim();
-        if (apiKey && apiKey.startsWith('sk-')) {
-            setSavedApiKey(apiKey);
-            setApiKeyBtn.textContent = 'API 키 변경';
+        const openaiKey = openaiKeyInput.value.trim();
+        const tourKey = tourKeyInput.value.trim();
+
+        let hasError = false;
+
+        if (!openaiKey || !openaiKey.startsWith('sk-')) {
+            alert('올바른 OpenAI API 키를 입력해주세요. (sk-로 시작해야 합니다)');
+            hasError = true;
+        }
+
+        if (!tourKey) {
+            alert('한국관광공사 TourAPI 키를 입력해주세요.');
+            hasError = true;
+        }
+
+        if (!hasError) {
+            setSavedOpenAIKey(openaiKey);
+            setSavedTourKey(tourKey);
+            savedOpenAIKey = openaiKey;
+            savedTourKey = tourKey;
+            updateButtonText();
             modal.style.display = 'none';
-        } else {
-            alert('올바른 OpenAI API 키를 입력해주세요.');
+            alert('API 키가 성공적으로 저장되었습니다!');
         }
     });
 
@@ -92,9 +125,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const characterLinks = document.querySelectorAll('.card:not(.disabled)');
     characterLinks.forEach(link => {
         link.addEventListener('click', function(event) {
-            if (!getSavedApiKey()) {
+            if (!checkApiKeys()) {
                 event.preventDefault();
-                alert('대화를 시작하기 전에 OpenAI API 키를 설정해주세요.');
+                alert('대화를 시작하기 전에 API 키를 모두 설정해주세요.');
                 modal.style.display = 'block';
             }
         });

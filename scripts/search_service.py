@@ -56,7 +56,7 @@ class SearchService:
         self.embedder = EmbeddingService()
         self.cache    = _VecCache(VECTOR_CACHE_PATH, MAX_CACHE_ITEMS)
 
-    def search(self, query: str, top_k: int = None) -> List[Dict]:
+    def search(self, query: str, top_k: int = None, tour_api_key: str = None) -> List[Dict]:
         want = top_k or NUM_RECOMMEND
         # 1) 캐시 조회
         qv = self.embedder.embed([query])[0]
@@ -67,7 +67,7 @@ class SearchService:
                 cards = hits[0].get("cards") or []
                 return cards[:want]
         # 2) 미스 → API 조회 후 저장
-        cards = self.data_svc.recommend_items(query, want=want)
+        cards = self.data_svc.recommend_items(query, want=want, tour_api_key=tour_api_key)
         if cards:
             self.cache.add(query, qv, cards)
         return cards
