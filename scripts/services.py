@@ -76,7 +76,7 @@ async def process_chat(req):
 
         # 2) 관광지 검색
         search_service = SearchService()
-        recommendations = search_service.search(user_text, top_k=5, tour_api_key=tour_api_key)
+        recommendations = search_service.search(user_text, top_k=5, tour_api_key=tour_api_key, openai_api_key=api_key)
 
         # 3) 캐릭터 응답 생성
         system_prompt = CHARACTER_SYSTEM_PROMPTS[character]
@@ -174,7 +174,7 @@ async def stream_chat(req):
 
     # 2) 관광지 검색
     search_service = SearchService()
-    recommendations = search_service.search(user_text, top_k=5, tour_api_key=tour_api_key)
+    recommendations = search_service.search(user_text, top_k=5, tour_api_key=tour_api_key, openai_api_key=api_key)
 
     # 3) 스트리밍용 메시지 구성
     system_prompt = CHARACTER_SYSTEM_PROMPTS[character]

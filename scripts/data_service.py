@@ -111,12 +111,15 @@ class _ImageCache:
 class DataService:
     """OpenAI로 (region, cat1) 추출 → 지역코드화 → TourAPI 목록/상세 → 카드 스키마 생성"""
 
-    def __init__(self):
+    def __init__(self, openai_api_key: str = None):
         self.base_url = KOREA_TOURISM_API_BASE
         self.api_key = KOREA_TOURISM_API_KEY
         self.timeout = TIMEOUT
         self._img_cache = _ImageCache(IMAGE_CACHE_TTL_SEC, IMAGE_CACHE_MAX)
-        self.client = OpenAI(api_key=OPENAI_API_KEY)
+        api_key = openai_api_key or OPENAI_API_KEY
+        if not api_key:
+            raise ValueError("OpenAI API key is required")
+        self.client = OpenAI(api_key=api_key)
 
     # --- 공용: API 키/JSON ---
     def _api_key(self) -> str:
