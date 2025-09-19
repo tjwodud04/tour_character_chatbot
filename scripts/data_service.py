@@ -86,12 +86,17 @@ def _validate_image_url(url: str) -> str:
 
 def _normalize_homepage(raw: str) -> str:
     t = (raw or "").strip()
-    if not t: return ""
-    m = re.search(r'href=["\']([^"\']+)["\']', t, re.I)  # a태그 안 링크만
-    if m: t = m.group(1).strip()
+    if not t:
+        return ""
+    # TourAPI homepage는 a 태그로 내려오는 경우가 많음 → href만 추출
+    m = re.search(r'href=["\']([^"\']+)["\']', t, re.I)
+    if m:
+        t = m.group(1).strip()
     t = t.replace("&amp;", "&")
-    if t.startswith("//"): t = "https:" + t
-    if not re.match(r'^https?://', t, re.I): t = "https://" + t
+    if t.startswith("//"):
+        t = "https:" + t
+    if not re.match(r"^https?://", t, re.I):
+        t = "https://" + t
     return _to_https(t)
 
 class _ImageCache:
@@ -249,41 +254,77 @@ class DataService:
             return None, None
 
     # --- 2) 상세 정보/요약/이미지 ---
-    def _fetch_detail_common(self, content_id: str) -> Tuple[str, str]:
-        if not content_id: return "", ""
+    def _fetch_detail_common(
+        self,
+        content_id: str,
+        tour_api_key: str = None,
+    ) -> Tuple[str, str, Optional[float], Optional[float]]:
+        """
+        overview, homepage, 좌표(mapx/mapy)를 반환
+        """
+        if not content_id:
+            return "", "", None, None
+
         url = f"{self.base_url}/detailCommon2"
         params = {
-            "serviceKey": self._api_key(),
-            "numOfRows": 1, "pageNo": 1,
-            "MobileOS": "ETC", "MobileApp": "TourAPI", "_type": "json",
-            "contentId": content_id,
-            # 🔹 overview/homepage 등 내려오도록 YN 플래그 보강
-            "overviewYN": "Y", "defaultYN": "Y",
-            "firstImageYN": "Y", "addrinfoYN": "Y",
-            "mapinfoYN": "Y", "catcodeYN": "Y",
+            "serviceKey": self._get_api_key(tour_api_key),  # << 동일 키 사용
+            "numOfRows": 1,
+            "pageNo": 1,
+            "MobileOS": "ETC",
+            "MobileApp": "TourAPI",
+            "_type": "json",
+            "contentId": content_id,  # v4.3: contentId만으로 공통정보 내려옴
         }
         try:
-            r = requests.get(url, params=params, timeout=self.timeout); r.raise_for_status()
-            item = (self._safe_json(r).get("response",{}).get("body",{}).get("items",{}).get("item",[{}]))[0]
+            r = requests.get(url, params=params, timeout=self.timeout)
+            r.raise_for_status()
+            item = (
+                self._safe_json(r)
+                .get("response", {})
+                .get("body", {})
+                .get("items", {})
+                .get("item", [{}])
+            )[0]
+
             overview = (item.get("overview") or "").strip()
             homepage = _normalize_homepage(item.get("homepage") or "")
-            return overview, homepage
+            # 좌표는 문자열로 내려오므로 float 변환 시도
+            mx = item.get("mapx")
+            my = item.get("mapy")
+            mapx = float(mx) if mx not in (None, "") else None
+            mapy = float(my) if my not in (None, "") else None
+            return overview, homepage, mapx, mapy
         except Exception:
-            return "", ""
+            return "", "", None, None
 
-    def _fetch_detail_image(self, content_id: str) -> str:
+    def _fetch_detail_image(self, content_id: str, tour_api_key: str = None) -> str:
         url = f"{self.base_url}/detailImage2"
-        p = {"serviceKey": self._api_key(), "numOfRows": 1, "pageNo": 1,
-             "MobileOS": "ETC", "MobileApp": "TourAPI", "_type": "json",
-             "contentId": content_id}
+        p = {
+            "serviceKey": self._get_api_key(tour_api_key),  # << 동일 키 사용
+            "numOfRows": 1,
+            "pageNo": 1,
+            "MobileOS": "ETC",
+            "MobileApp": "TourAPI",
+            "_type": "json",
+            "contentId": content_id,
+        }
         try:
-            r = requests.get(url, params=p, timeout=self.timeout); r.raise_for_status()
-            items = self._safe_json(r).get("response",{}).get("body",{}).get("items",{}).get("item",[])
-            if isinstance(items, dict): items=[items]
+            r = requests.get(url, params=p, timeout=self.timeout)
+            r.raise_for_status()
+            items = (
+                self._safe_json(r)
+                .get("response", {})
+                .get("body", {})
+                .get("items", {})
+                .get("item", [])
+            )
+            if isinstance(items, dict):
+                items = [items]
             for it in items or []:
-                for k in ("originimgurl","smallimageurl"):
+                for k in ("originimgurl", "smallimageurl"):
                     v = _validate_image_url(it.get(k) or "")
-                    if v: return v
+                    if v:
+                        return v
         except Exception:
             pass
         return ""
@@ -337,19 +378,21 @@ class DataService:
         return ok
 
     # --- 4) 이미지 선택 ---
-    def _pick_valid_image(self, cid_key: str, firstimage2: str, firstimage: str) -> str:
+    def _pick_valid_image(self, cid_key: str, firstimage2: str, firstimage: str, tour_api_key: str = None) -> str:
         cached = self._img_cache.get(cid_key)
-        if cached: return cached
+        if cached:
+            return cached
         for raw in (firstimage2, firstimage):
             valid = _validate_image_url(raw)
             if valid:
                 self._img_cache.set(cid_key, valid)
                 return valid
         # 폴백: detailImage2
-        img = self._fetch_detail_image(cid_key)
+        img = self._fetch_detail_image(cid_key, tour_api_key=tour_api_key)
         if img:
             self._img_cache.set(cid_key, img)
         return img
+
 
     # --- 메인: 추천 아이템 ---
     def recommend_items(self, user_query: str, want: int = None, tour_api_key: str = None) -> List[Dict]:
@@ -357,7 +400,7 @@ class DataService:
 
         # (1) 지역/대분류
         region, cat1 = self._extract_region_and_cat1(user_query)
-        area_code, sigungu_code = self._resolve_area_code(region) if region else (None, None)
+        area_code, sigungu_code = self._resolve_area_code(region)
 
         # 지역 해석 실패 시 키워드 기반 힌트
         if not area_code:
@@ -398,35 +441,43 @@ class DataService:
             items = []
 
         items = self._clean_items(items)
-        if not items: return []
+        if not items:
+            return []
 
         sample = random.sample(items, k=min(want, len(items)))
 
         out: List[Dict] = []
         for it in sample:
-            cid   = (it.get("contentid") or "").strip()
+            cid = (it.get("contentid") or "").strip()
             title = (it.get("title") or "").replace("<b>", "").replace("</b>", "").strip()
-            addr  = _compose_full_address((it.get("addr1") or ""), (it.get("addr2") or ""))
+            addr = _compose_full_address((it.get("addr1") or ""), (it.get("addr2") or ""))
 
-            overview, homepage = self._fetch_detail_common(cid)
-            reason = self._summarize_one_line(overview) or (overview[:120] + "..." if overview else "")
+            # ✅ 같은 키로 detailCommon 호출
+            overview, homepage, mapx, mapy = self._fetch_detail_common(cid, tour_api_key=tour_api_key)
+
+            reason = self._summarize_one_line(overview) or (
+                overview[:120] + "..." if overview else "관광지 정보를 확인해보세요."
+            )
 
             img = self._pick_valid_image(
                 cid,
                 _to_https((it.get("firstimage2") or "")),
-                _to_https((it.get("firstimage")  or "")),
+                _to_https((it.get("firstimage") or "")),
+                tour_api_key=tour_api_key,  # << 폴백 호출에도 동일 키
             )
 
-            fallbacks = self._fallback_link(title, addr)
-            link = homepage or fallbacks["homepage"]
+            # 지도 링크(예: Google Maps). mapy=위도(lat), mapx=경도(lng)
+            map_url = ""
+            if mapx is not None and mapy is not None:
+                map_url = f"https://maps.google.com/?q={mapy},{mapx}"
 
             out.append({
                 "name": title or "이름 정보 없음",
-                "reason": reason or "자세한 내용은 링크에서 확인해 보세요.",
+                "reason": reason or "한 줄 설명 없음",
                 "address": addr or "주소 정보 없음",
                 "image_url": img,
-                "homepage": link,
-                "map_link": fallbacks["map_link"],
+                "homepage": homepage,   # << TourAPI에서 받은 홈페이지 URL
+                "map_url": map_url,     # << 좌표로 생성한 지도 링크
                 "metadata": {
                     "contentid": cid,
                     "cat1": (it.get("cat1") or ""),
@@ -434,6 +485,8 @@ class DataService:
                     "firstimage2": (it.get("firstimage2") or ""),
                     "title": title,
                     "region": region,
+                    "mapx": mapx,
+                    "mapy": mapy,
                 }
             })
 

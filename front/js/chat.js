@@ -526,11 +526,11 @@ function _renderTourCards(recommendations){
 
   const cardsHTML = recommendations.map(place => {
     const name = _esc(place.name || "이름 정보 없음");
-    const reason = _esc(place.reason || "자세한 내용은 링크에서 확인해 보세요.");
+    const reason = _esc(place.reason || "설명 없음");
     const address = _esc(place.address || "주소 정보 없음");
     const imageUrl = place.image_url || "";
-    const homepage = place.homepage || "";
-    const mapLink = place.map_link || "";
+    const homepage = place.homepage || "";   // ✅ TourAPI homepage 그대로 사용
+    const mapUrl = place.map_url || "";      // ✅ 백엔드에서 만들어준 지도 링크
 
     return `
       <div class="tour-card">
@@ -538,16 +538,13 @@ function _renderTourCards(recommendations){
           ${imageUrl ? `
             <div class="tour-card-image">
               <img src="${imageUrl}" alt="${name}" onerror="this.style.display='none'">
-            </div>
-          ` : ""}
+            </div>` : ""}
           <div class="tour-card-info">
             <div class="tour-card-title">${name}</div>
             <div class="tour-card-description">${reason}</div>
             <div class="tour-card-address">📍 ${address}</div>
-            <div class="tour-card-link">
-              ${homepage ? `<a href="${homepage}" target="_blank" rel="noopener noreferrer">🔗 홈페이지</a>` : ""}
-              ${mapLink ? `${homepage ? "&nbsp;·&nbsp;" : ""}<a href="${mapLink}" target="_blank" rel="noopener noreferrer">🗺️ 지도</a>` : ""}
-            </div>
+            ${homepage ? `<div class="tour-card-link"><a href="${homepage}" target="_blank" rel="noopener">🔗 홈페이지 보기</a></div>` : ""}
+            ${mapUrl ? `<div class="tour-card-link"><a href="${mapUrl}" target="_blank" rel="noopener">🗺️ 지도 보기</a></div>` : ""}
           </div>
         </div>
       </div>`;
