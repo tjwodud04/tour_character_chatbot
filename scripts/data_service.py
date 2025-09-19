@@ -231,12 +231,17 @@ class DataService:
             return region, None
 
     # --- 1-1) 지역명 → areaCode 해석 ---
-    def _resolve_area_code(self, region_name: str) -> Tuple[Optional[str], Optional[str]]:
+    def _resolve_area_code(
+        self, region_name: str, tour_api_key: str = None
+        ) -> Tuple[Optional[str], Optional[str]]:
         if not region_name:
             return None, None
         url = f"{self.base_url}/areaCode2"
-        p = {"serviceKey": self._api_key(), "numOfRows": 100, "pageNo": 1,
-             "MobileOS": "ETC", "MobileApp": "TourAPI", "_type": "json"}
+        p = {
+        "serviceKey": self._get_api_key(tour_api_key),  # ✅ 동일 키 주입
+        "numOfRows": 100, "pageNo": 1,
+        "MobileOS": "ETC", "MobileApp": "TourAPI", "_type": "json",
+        }
         try:
             r = requests.get(url, params=p, timeout=self.timeout); r.raise_for_status()
             items = self._safe_json(r).get("response",{}).get("body",{}).get("items",{}).get("item",[]) or []
@@ -400,7 +405,7 @@ class DataService:
 
         # (1) 지역/대분류
         region, cat1 = self._extract_region_and_cat1(user_query)
-        area_code, sigungu_code = self._resolve_area_code(region)
+        area_code, sigungu_code = self._resolve_area_code(region, tour_api_key=tour_api_key)
 
         # 지역 해석 실패 시 키워드 기반 힌트
         if not area_code:

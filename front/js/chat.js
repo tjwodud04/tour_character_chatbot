@@ -530,7 +530,8 @@ function _renderTourCards(recommendations){
     const address = _esc(place.address || "주소 정보 없음");
     const imageUrl = place.image_url || "";
     const homepage = place.homepage || "";   // ✅ TourAPI homepage 그대로 사용
-    const mapUrl = place.map_url || "";      // ✅ 백엔드에서 만들어준 지도 링크
+    // const mapUrl = place.map_url || "";      // ✅ 백엔드에서 만들어준 지도 링크
+
 
     return `
       <div class="tour-card">
@@ -544,7 +545,7 @@ function _renderTourCards(recommendations){
             <div class="tour-card-description">${reason}</div>
             <div class="tour-card-address">📍 ${address}</div>
             ${homepage ? `<div class="tour-card-link"><a href="${homepage}" target="_blank" rel="noopener">🔗 홈페이지 보기</a></div>` : ""}
-            ${mapUrl ? `<div class="tour-card-link"><a href="${mapUrl}" target="_blank" rel="noopener">🗺️ 지도 보기</a></div>` : ""}
+            // ${mapUrl ? `<div class="tour-card-link"><a href="${mapUrl}" target="_blank" rel="noopener">🗺️ 지도 보기</a></div>` : ""}
           </div>
         </div>
       </div>`;
