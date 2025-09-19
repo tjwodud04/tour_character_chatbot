@@ -520,16 +520,17 @@ async function sendAudioToServerStream(audioBlob, characterType = 'kei') {
 // [ADD] 안전한 HTML 이스케이프
 function _esc(s){return (s||"").replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
 
-// [ADD] 제안 카드 HTML (수용/거절 버튼 포함)
+// [MOD] 제안 카드 HTML (홈페이지+지도 링크 동시 노출, reason 폴백 추가)
 function _renderTourCards(recommendations){
   if(!recommendations || !Array.isArray(recommendations) || recommendations.length === 0) return "";
 
   const cardsHTML = recommendations.map(place => {
     const name = _esc(place.name || "이름 정보 없음");
-    const reason = _esc(place.reason || "설명 없음");
+    const reason = _esc(place.reason || "자세한 내용은 링크에서 확인해 보세요.");
     const address = _esc(place.address || "주소 정보 없음");
     const imageUrl = place.image_url || "";
     const homepage = place.homepage || "";
+    const mapLink = place.map_link || "";
 
     return `
       <div class="tour-card">
@@ -543,7 +544,10 @@ function _renderTourCards(recommendations){
             <div class="tour-card-title">${name}</div>
             <div class="tour-card-description">${reason}</div>
             <div class="tour-card-address">📍 ${address}</div>
-            ${homepage ? `<div class="tour-card-link"><a href="${homepage}" target="_blank" rel="noopener">🔗 홈페이지 보기</a></div>` : ""}
+            <div class="tour-card-link">
+              ${homepage ? `<a href="${homepage}" target="_blank" rel="noopener noreferrer">🔗 홈페이지</a>` : ""}
+              ${mapLink ? `${homepage ? "&nbsp;·&nbsp;" : ""}<a href="${mapLink}" target="_blank" rel="noopener noreferrer">🗺️ 지도</a>` : ""}
+            </div>
           </div>
         </div>
       </div>`;
@@ -582,5 +586,3 @@ function _sanitizeHtml(input) {
   }
   return wrapper.innerHTML.replace(/\n/g, '<br>');
 }
-
-// 관광지 카드 관련 이벤트 처리는 필요시 여기에 추가

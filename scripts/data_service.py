@@ -7,7 +7,7 @@
 
 import time, json, re, random, requests
 from typing import List, Dict, Tuple, Optional
-from urllib.parse import urlparse, unquote
+from urllib.parse import urlparse, unquote, quote
 from openai import OpenAI
 from scripts.config import *
 
@@ -26,6 +26,16 @@ _REGION_HINTS = [
     "경기","강원","충북","충남","전북","전남","경북","경남",
     "제주","강원특별자치도","제주특별자치도"
 ]
+
+# 지역명 간단 정규화 테이블
+_NORMALIZE_REGION = {
+    "제주도": "제주", "제주특별자치도": "제주",
+    "서울특별시": "서울", "부산광역시": "부산", "대구광역시": "대구",
+    "인천광역시": "인천", "광주광역시": "광주", "대전광역시": "대전",
+    "울산광역시": "울산", "세종특별자치시": "세종",
+    "강원도": "강원", "경기도": "경기", "충청북도": "충북", "충청남도": "충남",
+    "전라북도": "전북", "전라남도": "전남", "경상북도": "경북", "경상남도": "경남",
+}
 
 # ----------------------------- 유틸 -----------------------------
 
@@ -128,7 +138,6 @@ class DataService:
         return k.replace(" ", "")
 
     def _get_api_key(self, tour_api_key: str = None) -> str:
-        # 전달받은 키가 있으면 사용, 없으면 기본 키 사용
         k = (tour_api_key or self.api_key or "").strip()
         if "%" in k: k = unquote(k)
         return k.replace(" ", "")
@@ -142,6 +151,31 @@ class DataService:
             except Exception: pass
         head = text[:300].replace("\n"," ") if text else ""
         raise ValueError(f"Non-JSON response (status={resp.status_code}, ct='{ct}'). Body head: {head}")
+
+    # --- 신규: 키워드로 areaCode 힌트 추출 ---
+    def _area_hint_from_keyword(self, q: str) -> Tuple[Optional[str], Optional[str]]:
+        """query로 searchKeyword2를 1~3건 조회해 areaCode/sigunguCode 힌트 추출"""
+        if not (q or "").strip():
+            return None, None
+        url = f"{self.base_url}/searchKeyword2"
+        p = {
+            "serviceKey": self._get_api_key(),
+            "numOfRows": 3, "pageNo": 1,
+            "MobileOS": "ETC", "MobileApp": "TourAPI", "_type": "json",
+            "keyword": q.strip(),
+        }
+        try:
+            r = requests.get(url, params=p, timeout=self.timeout); r.raise_for_status()
+            items = (self._safe_json(r).get("response",{}).get("body",{}).get("items",{}).get("item",[])) or []
+            if not isinstance(items, list): items = [items]
+            for it in items:
+                ac = str(it.get("areacode") or it.get("areaCode") or "").strip() or None
+                sg = str(it.get("sigungucode") or it.get("sigunguCode") or "").strip() or None
+                if ac:
+                    return ac, sg
+        except Exception:
+            pass
+        return None, None
 
     # --- 1) (region, cat1) 추출 ---
     def _extract_region_and_cat1(self, user_query: str) -> Tuple[str, Optional[str]]:
@@ -176,20 +210,25 @@ class DataService:
             )
             data = json.loads(resp.choices[0].message.content or "{}")
             region = (data.get("region") or "").strip()
+            region = _NORMALIZE_REGION.get(region, region)
             cat1   = (data.get("cat1") or "").strip().upper()
             if cat1 not in {c["code"] for c in CAT1_CHOICES}: cat1 = None
+
+            # 지역 힌트가 전혀 없으면 빈 문자열로 (전국 검색 방지)
             if not region:
                 t = (user_query or "").strip()
-                region = next((w for w in _REGION_HINTS if w in t), t)
+                region = next((w for w in _REGION_HINTS if w in t), "")
             print(f"[DEBUG] 추출된 지역: '{region}', 카테고리: '{cat1}', 원본 쿼리: '{user_query}'")
             return region, cat1
         except Exception:
             t = (user_query or "").strip()
-            region = next((w for w in _REGION_HINTS if w in t), t)
+            region = next((w for w in _REGION_HINTS if w in t), "")
             return region, None
 
     # --- 1-1) 지역명 → areaCode 해석 ---
     def _resolve_area_code(self, region_name: str) -> Tuple[Optional[str], Optional[str]]:
+        if not region_name:
+            return None, None
         url = f"{self.base_url}/areaCode2"
         p = {"serviceKey": self._api_key(), "numOfRows": 100, "pageNo": 1,
              "MobileOS": "ETC", "MobileApp": "TourAPI", "_type": "json"}
@@ -198,17 +237,13 @@ class DataService:
             items = self._safe_json(r).get("response",{}).get("body",{}).get("items",{}).get("item",[]) or []
             name = (region_name or "").replace("특별자치도","").replace("광역시","").replace("특별시","").strip()
 
-            # 정확한 매칭 우선 시도
             cand = [it for it in items if name and name in (it.get("name") or "")]
-
-            # 매칭되지 않으면 None 반환 (잘못된 지역 필터링 방지)
             if not cand:
-                print(f"[DEBUG] 지역명 '{region_name}' -> 정규화 '{name}' -> 매칭 실패, 지역 필터 없이 검색")
+                print(f"[DEBUG] 지역명 '{region_name}' -> 정규화 '{name}' -> 매칭 실패, 지역 힌트 사용 예정")
                 return None, None
 
             code = (cand[0].get("code") if cand else None)
             print(f"[DEBUG] 지역명 '{region_name}' -> 정규화 '{name}' -> 코드 '{code}'")
-            print(f"[DEBUG] 매칭된 지역: {cand[0].get('name', '알 수 없음')}")
             return (str(code) if code else None), None
         except Exception:
             return None, None
@@ -217,9 +252,16 @@ class DataService:
     def _fetch_detail_common(self, content_id: str) -> Tuple[str, str]:
         if not content_id: return "", ""
         url = f"{self.base_url}/detailCommon2"
-        params = {"serviceKey": self._api_key(), "numOfRows": 1, "pageNo": 1,
-                  "MobileOS": "ETC", "MobileApp": "TourAPI", "_type": "json",
-                  "contentId": content_id}
+        params = {
+            "serviceKey": self._api_key(),
+            "numOfRows": 1, "pageNo": 1,
+            "MobileOS": "ETC", "MobileApp": "TourAPI", "_type": "json",
+            "contentId": content_id,
+            # 🔹 overview/homepage 등 내려오도록 YN 플래그 보강
+            "overviewYN": "Y", "defaultYN": "Y",
+            "firstImageYN": "Y", "addrinfoYN": "Y",
+            "mapinfoYN": "Y", "catcodeYN": "Y",
+        }
         try:
             r = requests.get(url, params=params, timeout=self.timeout); r.raise_for_status()
             item = (self._safe_json(r).get("response",{}).get("body",{}).get("items",{}).get("item",[{}]))[0]
@@ -245,6 +287,16 @@ class DataService:
         except Exception:
             pass
         return ""
+
+    # --- 신규: 홈페이지/지도 폴백 링크 ---
+    def _fallback_link(self, title: str, addr: str) -> dict:
+        q = (title or addr or "").strip()
+        if not q:
+            return {"homepage":"", "map_link":""}
+        return {
+            "homepage": f"https://www.google.com/search?q={quote(q)}",
+            "map_link": f"https://map.naver.com/v5/search/{quote(q)}"
+        }
 
     def _summarize_one_line(self, text: str) -> str:
         t = (text or "").strip()
@@ -277,6 +329,10 @@ class DataService:
             if not title: continue
             if re.search(r"(대리점|지점|점$|마트|백화점|면세점|아울렛|할인점|스토어)", title):
                 continue
+            # 전국 검색일 가능성(areacode 없음)엔 더 보수적으로 필터
+            if not it.get("areacode"):
+                if re.search(r"(○○점|영업소|직영점|가맹점)", title):
+                    continue
             ok.append(it)
         return ok
 
@@ -301,7 +357,13 @@ class DataService:
 
         # (1) 지역/대분류
         region, cat1 = self._extract_region_and_cat1(user_query)
-        area_code, sigungu_code = self._resolve_area_code(region)
+        area_code, sigungu_code = self._resolve_area_code(region) if region else (None, None)
+
+        # 지역 해석 실패 시 키워드 기반 힌트
+        if not area_code:
+            ac_hint, sg_hint = self._area_hint_from_keyword(user_query)
+            area_code = area_code or ac_hint
+            sigungu_code = sigungu_code or sg_hint
 
         # (2) 지역기반 목록(areaBasedList2) + 대표이미지 보장 정렬
         url = f"{self.base_url}/areaBasedList2"
@@ -319,7 +381,7 @@ class DataService:
         if sigungu_code: params["sigunguCode"] = sigungu_code
         if cat1: params["cat1"] = cat1
 
-        print(f"[DEBUG] TourAPI 호출 매개변수: areaCode={area_code}, cat1={cat1}, numOfRows={num_rows}")
+        print(f"[DEBUG] TourAPI 호출 매개변수: areaCode={area_code}, sigunguCode={sigungu_code}, cat1={cat1}, numOfRows={num_rows}")
 
         items: List[Dict]
         try:
@@ -347,7 +409,7 @@ class DataService:
             addr  = _compose_full_address((it.get("addr1") or ""), (it.get("addr2") or ""))
 
             overview, homepage = self._fetch_detail_common(cid)
-            reason = self._summarize_one_line(overview) or (overview[:120] + "..." if overview else "관광지 정보를 확인해보세요.")
+            reason = self._summarize_one_line(overview) or (overview[:120] + "..." if overview else "")
 
             img = self._pick_valid_image(
                 cid,
@@ -355,12 +417,16 @@ class DataService:
                 _to_https((it.get("firstimage")  or "")),
             )
 
+            fallbacks = self._fallback_link(title, addr)
+            link = homepage or fallbacks["homepage"]
+
             out.append({
                 "name": title or "이름 정보 없음",
-                "reason": reason or "한 줄 설명 없음",
+                "reason": reason or "자세한 내용은 링크에서 확인해 보세요.",
                 "address": addr or "주소 정보 없음",
                 "image_url": img,
-                "homepage": homepage,
+                "homepage": link,
+                "map_link": fallbacks["map_link"],
                 "metadata": {
                     "contentid": cid,
                     "cat1": (it.get("cat1") or ""),
