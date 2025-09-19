@@ -545,7 +545,6 @@ function _renderTourCards(recommendations){
             <div class="tour-card-description">${reason}</div>
             <div class="tour-card-address">📍 ${address}</div>
             ${homepage ? `<div class="tour-card-link"><a href="${homepage}" target="_blank" rel="noopener">🔗 홈페이지 보기</a></div>` : ""}
-            // ${mapUrl ? `<div class="tour-card-link"><a href="${mapUrl}" target="_blank" rel="noopener">🗺️ 지도 보기</a></div>` : ""}
           </div>
         </div>
       </div>`;
