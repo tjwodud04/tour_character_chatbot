@@ -17,7 +17,7 @@ class _RedisVecCache:
     def __init__(self, redis_url: str, ttl_seconds: int):
         self.redis_client = redis.from_url(redis_url, decode_responses=True)
         self.ttl = ttl_seconds
-        self.prefix = "tour_cache:"
+        self.prefix = f"tour_cache:{CACHE_VERSION}:"
 
     def _make_key(self, query: str) -> str:
         # 쿼리를 해시로 변환하여 키 생성
