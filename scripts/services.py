@@ -81,18 +81,18 @@ def _region_key(s: str) -> str:
 
 def _download_blob_json_by_name(blob_filename: str) -> list[dict]:
     """
-    퍼블릭 URL이 확정돼 있을 때 가장 단순하고 안정적으로 JSON을 로드하는 함수.
+    퍼블릭 URL에서 코스 인덱스를 로드.
     우선순위:
-      1) COURSE_INDEX_FULL_URL (있으면 그대로 사용)
+      1) COURSE_INDEX_FULL_URL
       2) VERCEL_BLOB_PUBLIC_BASE + blob_filename
-    특징:
-      - 2회 재시도(간단 backoff)
-      - Content-Type이 json이 아니어도 text를 직접 json.loads로 파싱 시도
-      - 최종 반환은 list[dict] 형태(단일 dict면 [dict]로 감싸줌)
+    안전장치:
+      - 2회 재시도(backoff)
+      - Content-Type이 json이 아니어도 text를 직접 json.loads
+      - NDJSON(줄 단위 JSON)도 허용
+    반환: list[dict]
     """
-    # 1) 최종 URL 결정
     base = (VERCEL_BLOB_PUBLIC_BASE or "").rstrip("/")
-    full_url = (COURSE_INDEX_FULL_URL or "").strip()  # config.py에 추가한 값
+    full_url = (COURSE_INDEX_FULL_URL or "").strip()
     if not full_url:
         full_url = f"{base}/{blob_filename.lstrip('/')}" if base else ""
 
@@ -100,31 +100,49 @@ def _download_blob_json_by_name(blob_filename: str) -> list[dict]:
         print("[Blob] public base/url 미설정으로 코스 인덱스를 불러올 수 없습니다.")
         return []
 
-    # 2) 요청(간단 재시도)
     last_err: Exception | None = None
-    for attempt in range(2):  # 총 2회 시도
+    for _ in range(2):  # 2회 재시도
         try:
             r = requests.get(full_url, timeout=12)
             r.raise_for_status()
-
-            # 3) JSON 파싱 (Content-Type이 application/json이 아닐 수 있음)
             ctype = (r.headers.get("Content-Type") or "").lower()
-            if "json" in ctype:
-                data: Any = r.json()
-            else:
-                txt = r.text or ""
-                data = json.loads(txt)
 
-            # 4) 일관 반환(list[dict])
-            if isinstance(data, list):
-                return data
-            if isinstance(data, dict):
-                return [data]
-            # 다른 타입이면 빈 리스트 처리
-            return []
+            def _coerce_any_to_list_dict(data: Any) -> list[dict]:
+                if isinstance(data, list):
+                    return [x for x in data if isinstance(x, dict)]
+                if isinstance(data, dict):
+                    return [data]
+                if isinstance(data, str):
+                    # NDJSON 가능성: 줄 단위 파싱
+                    rows = []
+                    for line in data.splitlines():
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                            if isinstance(obj, dict):
+                                rows.append(obj)
+                        except Exception:
+                            pass
+                    return rows
+                return []
+
+            # 1) JSON 헤더면 r.json()
+            if "json" in ctype:
+                data = r.json()
+                return _coerce_any_to_list_dict(data)
+
+            # 2) 아니면 text를 직접 파싱 (JSON / NDJSON)
+            txt = r.text or ""
+            try:
+                data = json.loads(txt)
+                return _coerce_any_to_list_dict(data)
+            except Exception:
+                return _coerce_any_to_list_dict(txt)
+
         except Exception as e:
             last_err = e
-            # 네트워크 버벅임 대비 짧은 backoff
             time.sleep(0.6)
 
     print(f"[Blob] public fetch 실패: {last_err}")
@@ -132,40 +150,68 @@ def _download_blob_json_by_name(blob_filename: str) -> list[dict]:
 
 def pick_courses_for_region(region: str, n: int = COURSE_RECOMMEND_COUNT) -> list[dict]:
     """
-    web_courses_index_selenium.json 스키마(가변)를 관용적으로 파싱
-    [{ "region":"제주", "title":"...", "thumb":"...", "url":"...", "desc":"..." }, ...]
+    web_courses_index_selenium.json 스키마(샘플):
+    {
+      "cotid": "...",
+      "title": "안전에서 역사까지 익산의 오감 여행코스",
+      "course_url": "https://...",
+      "thumbnail": "https://...",
+      "location": "전북 익산시",
+      "hashtags": [...],
+      "spots": [...]
+    }
+    반환 형태(프런트 카드 그대로 재사용):
+      [{ "title": str, "thumbnail": str, "link": str, "desc": str }]
     """
-    region = _region_key(region)
+    def _norm_region(s: str) -> str:
+        s = (s or "").strip()
+        return s.replace("특별자치도","").replace("광역시","").replace("특별시","").replace("도","").strip()
+
+    want_region = _norm_region(region)
     raw = _download_blob_json_by_name(COURSE_INDEX_BLOB_FILENAME)
     if not raw:
         return []
 
-    def _get(d, keys, default=""):
+    def _get(d: dict, keys: list[str], default: str = "") -> str:
         for k in keys:
-            if k in d and d[k]:
-                return d[k]
+            v = d.get(k)
+            if v:
+                return str(v)
         return default
 
-    # 지역 매칭(부분 포함 허용)
-    cand = []
+    # 지역 필터: location 문자열에 부분 포함 허용
+    filtered = []
     for it in raw:
-        r = _get(it, ["region","시도","지역","area"], "")
-        if not r:
-            continue
-        rk = _region_key(str(r))
-        if (region and region in rk) or (rk and rk in region) or (region == rk):
-            cand.append(it)
+        loc = _get(it, ["location", "지역", "시도", "area"], "")
+        loc_norm = _norm_region(loc)
+        if not want_region or not loc_norm:
+            pass_filter = True  # 지역 미지정이면 전체 허용
+        else:
+            pass_filter = (want_region in loc_norm) or (loc_norm in want_region)
+        if pass_filter:
+            filtered.append(it)
 
-    # 상위 n개 선택(단순)
-    cand = cand[: max(n, 1)]
+    # 상위 n개 선택 (정렬 규칙이 없다면 앞에서 n개)
+    cand = filtered[: max(1, n)]
 
-    out = []
-    for it in cand[:n]:
-        title = _get(it, ["title","name","코스명","course","코스","제목"], "코스")
-        img   = _get(it, ["thumb","thumbnail","image","이미지","썸네일"], "")
-        url   = _get(it, ["url","link","href","페이지","상세링크"], "")
-        desc  = _get(it, ["desc","description","요약","소개"], "")
-        out.append({"title": title, "thumbnail": img, "link": url, "desc": desc})
+    out: list[dict] = []
+    for it in cand:
+        title = _get(it, ["title", "name", "코스명", "제목"], "코스")
+        thumb = _get(it, ["thumbnail", "thumb", "image", "이미지"], "")
+        link  = _get(it, ["course_url", "url", "link", "href"], "")
+        # spots를 간단히 요약(최대 3개를 ' · '로 연결)
+        spots = it.get("spots") if isinstance(it.get("spots"), list) else []
+        desc = " · ".join([str(s) for s in spots[:3]]) if spots else ""
+        out.append({
+            "title": title,
+            "thumbnail": thumb,
+            "link": link,
+            "desc": desc
+        })
+
+        if len(out) >= n:
+            break
+
     return out
 
 # ======================================================================================
