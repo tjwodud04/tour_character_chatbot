@@ -15,12 +15,14 @@ def register_routes(app):
         return render_template('index.html')
 
     @app.route('/scripts/chat', methods=['POST'])
-    async def chat_once():
-        return await process_chat(request)
+    def chat_once():
+        import asyncio
+        return asyncio.run(process_chat(request))
 
     @app.route('/scripts/chat_stream', methods=['POST'])
-    async def chat_stream():
-        return await stream_chat(request)
+    def chat_stream():
+        import asyncio
+        return asyncio.run(stream_chat(request))
 
     # ▼▼▼ 교체한 부분: 코스 + (옵션) gpt-4o-mini-tts 음성 동시 반환 ▼▼▼
     @app.route('/scripts/courses', methods=['GET'])
