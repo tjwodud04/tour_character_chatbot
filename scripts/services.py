@@ -17,7 +17,7 @@ from scripts.config import (
     VERCEL_BLOB_TOKEN, COURSE_INDEX_BLOB_FILENAME, COURSE_RECOMMEND_COUNT,
     VERCEL_BLOB_PUBLIC_BASE
 )
-from scripts.utils import remove_empty_parentheses, remove_emojis
+from scripts.utils import remove_empty_parentheses, remove_emojis, copula_iy_a
 from scripts.search_service import SearchService
 
 # ======================================================================================
@@ -60,18 +60,21 @@ def _first_reply_prefix(recs: list[dict], character: str = "kei") -> str:
     names = [ (r.get("name") or "").strip() for r in recs if r.get("name") ]
     names = [n for n in names if n][:3]
     names_str = ", ".join(names) if names else "관광지"
+    # 마지막 명사를 기준으로 '이야/야' 선택
+    last_name = names[-1] if names else "관광지"
+    cop = copula_iy_a(last_name)
 
     if character == "kei":
         # 요청한 Kei 전용 문구
         return (
-            f"추천하는 관광지는 {names_str}이야! "
+            f"추천하는 관광지는 {names_str}{cop}! "
             f"더 자세한 내용은 아래의 카드를 참고해 줘. "
             f"추가로, 추천 관광 코스도 보여줄 수 있는데, 원해?"
         )
     else:
         # Haru 등은 기존 톤 유지(간결)
         return (
-            f"관광지 {names_str}를 추천합니다. "
+            f"관광지 {names_str}{cop} 추천입니다. "
             f"자세한 내용은 아래 카드를 참고해 주세요. "
             f"원하시면 관련 관광 코스도 제안해 드릴까요?"
         )
