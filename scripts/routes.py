@@ -2,7 +2,7 @@ import time
 from flask import render_template, request, Blueprint, jsonify
 
 # 관광지 추천 채팅 처리
-from scripts.services import process_chat, stream_chat
+from scripts.services import process_chat, stream_chat, pick_courses_for_region
 
 bp = Blueprint("api", __name__)
 
@@ -21,17 +21,13 @@ def register_routes(app):
     async def chat_stream():
         return await stream_chat(request)
 
-    # 지역별 관광 코스(Blob JSON) 제공
+     # ▼▼▼ 추가: 지역 코스 조회 (Vercel Blob에서 JSON 읽기) ▼▼▼
     @app.route('/scripts/courses', methods=['GET'])
     def get_courses():
-        """?region=제주&n=3  →  { region, count, courses:[{title,thumbnail,link,desc}, ...] }"""
-        region = (request.args.get('region') or "").strip()
-        n = int(request.args.get('n') or 3)
-        if not region:
-            return jsonify({"error":"region required"}), 400
+        region = request.args.get('region', '').strip()
         try:
-            from scripts.services import pick_courses_for_region
-            courses = pick_courses_for_region(region, n)
-            return jsonify({"region": region, "count": len(courses), "courses": courses})
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            n = int(request.args.get('n', '3'))
+        except Exception:
+            n = 3
+        courses = pick_courses_for_region(region, n)
+        return jsonify({"region": region, "count": len(courses), "courses": courses}), 200

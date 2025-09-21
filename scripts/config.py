@@ -3,6 +3,19 @@ import os
 VERCEL_TOKEN = os.getenv("VERCEL_TOKEN")
 VERCEL_PROJ_ID = os.getenv("VERCEL_PROJECT_ID")
 
+# ▼▼▼ 추가: Vercel Blob 접근 설정 ▼▼▼
+# 읽기 전용 퍼블릭 베이스 URL (예: https://xxxx.public.blob.vercel-storage.com)
+VERCEL_BLOB_PUBLIC_BASE = os.getenv(
+    "VERCEL_BLOB_PUBLIC_BASE",
+    "https://hohz7fp3rniqdmon.public.blob.vercel-storage.com"
+)
+# (선택) RW 토큰이 있을 때만 Vercel API 목록 조회 폴백 사용
+VERCEL_BLOB_TOKEN = os.getenv("BLOB_READ_WRITE_TOKEN") or os.getenv("VERCEL_BLOB_TOKEN")
+
+# 코스 인덱스 파일명/개수
+COURSE_INDEX_BLOB_FILENAME = os.getenv("COURSE_INDEX_BLOB_FILENAME", "web_courses_index_selenium.json")
+COURSE_RECOMMEND_COUNT = int(os.getenv("COURSE_RECOMMEND_COUNT", "3"))
+
 # TourAPI 설정
 KOREA_TOURISM_API_BASE = "http://apis.data.go.kr/B551011/KorService2"
 KOREA_TOURISM_API_KEY = os.getenv("KOREA_TOURISM_API_KEY")
@@ -41,10 +54,5 @@ CHARACTER_VOICE = {
     "haru": "shimmer"
 }
 
-HISTORY_MAX_LEN = 10 
+HISTORY_MAX_LEN = 10
 CACHE_VERSION = "v6"
-
-# --- Vercel Blob 읽기용 ---
-VERCEL_BLOB_TOKEN = os.getenv("VERCEL_BLOB_TOKEN") or os.getenv("BLOB_READ_WRITE_TOKEN")
-COURSE_INDEX_BLOB_FILENAME = "web_courses_index_selenium.json"
-COURSE_RECOMMEND_COUNT = 3
