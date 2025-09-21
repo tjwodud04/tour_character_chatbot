@@ -12,7 +12,7 @@ class EmbeddingService:
         key = (api_key or os.getenv("OPENAI_API_KEY") or "").strip()
         if not key:
             # 상위에서 401 등으로 변환 처리하기 쉽도록 명확히 실패시킴
-            raise AuthenticationError("OPENAI_API_KEY not provided to EmbeddingService")
+            raise AuthenticationError("OPENAI_API_KEY가 설정되지 않았습니다. (헤더 X-API-KEY 또는 환경변수)")
         self.client = OpenAI(api_key=key)  # 클라이언트 생성
 
     def embed(self, texts: List[str]) -> List[List[float]]:

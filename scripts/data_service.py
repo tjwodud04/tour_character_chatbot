@@ -223,7 +223,7 @@ class DataService:
             if not region:
                 t = (user_query or "").strip()
                 region = next((w for w in _REGION_HINTS if w in t), "")
-            print(f"[DEBUG] 추출된 지역: '{region}', 카테고리: '{cat1}', 원본 쿼리: '{user_query}'")
+            print(f"[DEBUG] region='{region}', cat1='{cat1}'")
             return region, cat1
         except Exception:
             t = (user_query or "").strip()
@@ -336,6 +336,7 @@ class DataService:
 
     # --- 신규: 홈페이지/지도 폴백 링크 ---
     def _fallback_link(self, title: str, addr: str) -> dict:
+        """TourAPI homepage가 비었을 때 최소 검색/지도 링크 폴백."""
         q = (title or addr or "").strip()
         if not q:
             return {"homepage":"", "map_link":""}
@@ -415,6 +416,7 @@ class DataService:
 
         # (2) 지역기반 목록(areaBasedList2) + 대표이미지 보장 정렬
         url = f"{self.base_url}/areaBasedList2"
+        # 이미지/품질 필터로 탈락분 고려해 넉넉히 가져옴
         num_rows = max(80, want * API_FETCH_MULTIPLIER)
         params = {
             "serviceKey": self._get_api_key(tour_api_key),

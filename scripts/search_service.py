@@ -8,6 +8,7 @@ import json, math, hashlib
 import redis
 
 def _cos_sim(a: list[float], b: list[float]) -> float:
+    """코사인 유사도 (0-division 방지 포함)"""
     dot = sum(x*y for x, y in zip(a, b))
     na = math.sqrt(sum(x*x for x in a)) or 1e-9
     nb = math.sqrt(sum(y*y for y in b)) or 1e-9
@@ -20,7 +21,7 @@ class _RedisVecCache:
         self.prefix = f"tour_cache:{CACHE_VERSION}:"
 
     def _make_key(self, query: str) -> str:
-        # 쿼리를 해시로 변환하여 키 생성
+        # 쿼리를 해시로 변환하여 키 생성 (원문 저장 부담/키 길이 이슈 회피)
         hash_obj = hashlib.md5(query.encode('utf-8'))
         return f"{self.prefix}{hash_obj.hexdigest()}"
 

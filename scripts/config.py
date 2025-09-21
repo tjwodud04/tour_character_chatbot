@@ -3,7 +3,6 @@ import os
 VERCEL_TOKEN = os.getenv("VERCEL_TOKEN")
 VERCEL_PROJ_ID = os.getenv("VERCEL_PROJECT_ID")
 
-# ▼▼▼ 추가: Vercel Blob 접근 설정 ▼▼▼
 # 읽기 전용 퍼블릭 베이스 URL (예: https://xxxx.public.blob.vercel-storage.com)
 VERCEL_BLOB_PUBLIC_BASE = os.getenv(
     "VERCEL_BLOB_PUBLIC_BASE",
@@ -16,8 +15,8 @@ VERCEL_BLOB_TOKEN = os.getenv("BLOB_READ_WRITE_TOKEN") or os.getenv("VERCEL_BLOB
 COURSE_INDEX_BLOB_FILENAME = os.getenv("COURSE_INDEX_BLOB_FILENAME", "web_courses_index_selenium.json")
 COURSE_RECOMMEND_COUNT = int(os.getenv("COURSE_RECOMMEND_COUNT", "3"))
 COURSE_INDEX_FULL_URL = os.getenv(
-    "https://hohz7fp3rniqdmon.public.blob.vercel-storage.com/web_courses_index_selenium.json",
-    ""
+    "COURSE_INDEX_FULL_URL",
+    "https://hohz7fp3rniqdmon.public.blob.vercel-storage.com/web_courses_index_selenium.json"
 )
 
 # TourAPI 설정
