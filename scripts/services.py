@@ -64,7 +64,7 @@ def _first_reply_prefix(recs: list[dict], character: str = "kei") -> str:
     if character == "kei":
         # 요청한 Kei 전용 문구
         return (
-            f"추천하는 관광지는 {names_str}야! "
+            f"추천하는 관광지는 {names_str}이야! "
             f"더 자세한 내용은 아래의 카드를 참고해 줘. "
             f"추가로, 추천 관광 코스도 보여줄 수 있는데, 원해?"
         )
