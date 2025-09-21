@@ -1,8 +1,8 @@
 # scripts/routes.py
 import time
 import base64
+import asyncio
 from flask import render_template, request, Blueprint, jsonify
-
 from scripts.services import process_chat, stream_chat, pick_courses_for_region
 from scripts.config import CHARACTER_VOICE
 from openai import OpenAI   # ← 동기 클라이언트 사용
@@ -15,13 +15,11 @@ def register_routes(app):
         return render_template('index.html')
 
     @app.route('/scripts/chat', methods=['POST'])
-    def chat_once():
-        import asyncio
+    def chat_once():        
         return asyncio.run(process_chat(request))
 
     @app.route('/scripts/chat_stream', methods=['POST'])
     def chat_stream():
-        import asyncio
         return asyncio.run(stream_chat(request))
 
     # ▼▼▼ 교체한 부분: 코스 + (옵션) gpt-4o-mini-tts 음성 동시 반환 ▼▼▼
