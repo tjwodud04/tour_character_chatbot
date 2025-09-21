@@ -4,8 +4,7 @@ import threading
 import json
 import requests
 import datetime
-import time
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 from urllib.parse import quote
 
 from flask import jsonify, abort, request, Response, stream_with_context
@@ -18,8 +17,7 @@ from scripts.config import (
     VERCEL_BLOB_TOKEN, COURSE_INDEX_BLOB_FILENAME, COURSE_RECOMMEND_COUNT
 )
 from scripts.utils import (
-    remove_empty_parentheses, markdown_to_html_links,
-    extract_first_markdown_url, remove_emojis
+    remove_empty_parentheses, remove_emojis
 )
 from scripts.search_service import SearchService
 
@@ -54,28 +52,28 @@ def upload_log_to_vercel_blob(blob_name: str, data: dict):
         print(f"Vercel Blob 로그 업로드 예외: {e}")
 
 # ======================================================================================
-# 신규: 첫 답변 머리말 & 지역 코스(Blob) 유틸
+# 유틸: 첫 답변 머리말 & 지역 코스(Blob)
 # ======================================================================================
 def _first_reply_prefix(recommendations: list[dict]) -> str:
     """
-    '<지역> 관광지(이름1, 이름2, 이름3)를 추천해요. 조금 더 자세한 내용은 아래의 카드를 참고해주세요.
-     원하시면 지역과 관련된 관광 코스도 추천해줄 수 있는데, 보여드릴까요?'
+    요구사항:
+    1) 관광지명은 괄호 없이 콤마로만 나열
+    2) 장문의 부연설명 없이 짧게
+    예시: '제주 관광지 따라비 오름, 각시바위오름, 법환포구를 추천해요.
+          조금 더 자세한 내용은 아래의 카드를 참고해주세요.
+          원하시면 지역과 관련된 관광 코스도 추천해줄 수 있는데, 보여드릴까요?'
     """
     if not recommendations:
         return ""
     names = [ (rec.get("name") or "").strip() for rec in recommendations if rec.get("name") ]
+    names = [n for n in names if n]
     names = names[:3]
     region = (recommendations[0].get("metadata") or {}).get("region") or ""
     region_part = f"{region} " if region else ""
-    if names:
-        names_str = ", ".join(names)
-        return (
-            f"{region_part}관광지({names_str})를 추천해요. "
-            f"조금 더 자세한 내용은 아래의 카드를 참고해주세요.\n\n"
-            f"원하시면 지역과 관련된 관광 코스도 추천해줄 수 있는데, 보여드릴까요?"
-        )
+    names_str = ", ".join(names) if names else "관광지"
+
     return (
-        f"{region_part}관광지를 추천해요. "
+        f"{region_part}관광지 {names_str}를 추천해요. "
         f"조금 더 자세한 내용은 아래의 카드를 참고해주세요.\n\n"
         f"원하시면 지역과 관련된 관광 코스도 추천해줄 수 있는데, 보여드릴까요?"
     )
@@ -86,9 +84,7 @@ def _region_key(s: str) -> str:
     return s
 
 def _download_blob_json_by_name(blob_filename: str) -> list[dict]:
-    """
-    Vercel Blob API(v2) 목록 조회 → filename 기준으로 downloadUrl 획득 → JSON 로드
-    """
+    """Vercel Blob API(v2) 목록 조회 → filename 기준으로 downloadUrl 획득 → JSON 로드"""
     if not VERCEL_BLOB_TOKEN:
         raise RuntimeError("VERCEL_BLOB_TOKEN 이(가) 설정되지 않았습니다.")
     try:
@@ -114,9 +110,9 @@ def _download_blob_json_by_name(blob_filename: str) -> list[dict]:
 
 def pick_courses_for_region(region: str, n: int = COURSE_RECOMMEND_COUNT) -> list[dict]:
     """
-    web_courses_index_selenium.json 예시 스키마(탄력적 매핑):
+    web_courses_index_selenium.json (탄력적 매핑):
     [{"region":"제주","title":"...", "thumb":"...", "url":"...", "desc":"..."}, ...]
-    → [{title, thumbnail, link, desc}]로 정규화
+    → [{title, thumbnail, link, desc}]
     """
     region = _region_key(region)
     raw = _download_blob_json_by_name(COURSE_INDEX_BLOB_FILENAME)
@@ -155,7 +151,7 @@ def pick_courses_for_region(region: str, n: int = COURSE_RECOMMEND_COUNT) -> lis
     return out
 
 # ======================================================================================
-# 메인 처리(관광지 추천 채팅)
+# 메인 처리(관광지 추천 채팅) — 첫 답변은 '프리픽스'만 사용(장문 제거)
 # ======================================================================================
 async def process_chat(req):
     try:
@@ -167,61 +163,36 @@ async def process_chat(req):
         character = req.form.get('character', 'kei')
         client = get_openai_client(api_key)
 
-        # 1) Whisper STT
+        # 1) STT (요청대로 transcribe 모델 통일)
         audio_file = req.files['audio']
         stt_result = await client.audio.transcriptions.create(
             file=("audio.webm", audio_file.read()),
-            model="gpt-4o-mini-transcribe",  # whisper-1 대체
+            model="gpt-4o-mini-transcribe",
             response_format="text"
         )
         user_text = stt_result or ""
 
         # 2) 관광지 검색
         search_service = SearchService(openai_api_key=api_key)
-        recommendations = search_service.search(
-            user_text, top_k=3, tour_api_key=tour_api_key, openai_api_key=api_key
-        )
+        recommendations = search_service.search(user_text, top_k=3, tour_api_key=tour_api_key, openai_api_key=api_key)
 
-        # 3) 캐릭터 응답 생성
-        system_prompt = CHARACTER_SYSTEM_PROMPTS[character]
-        with history_lock:
-            messages = [{"role": "system", "content": system_prompt}] + conversation_history[-HISTORY_MAX_LEN:]
-
+        # 3) 첫 답변: 프리픽스만 사용(괄호/장문 제거)
         if recommendations:
-            tour_context = "추천된 관광지 정보:\n"
-            for i, rec in enumerate(recommendations, 1):
-                tour_context += f"{i}. {rec['name']} - {rec.get('reason', '')}\n"
-            user_prompt = f"{user_text}\n\n{tour_context}\n\n위 관광지들을 참고해서 친근하게 추천해주세요. 2-3문장으로 간단히 설명해주세요."
+            ai_text = _first_reply_prefix(recommendations)
         else:
-            user_prompt = f"{user_text}\n\n관련 관광지를 찾지 못했습니다. 다른 지역이나 키워드로 다시 물어봐 달라고 안내해주세요."
+            ai_text = "관련 관광지를 아직 찾지 못했어요. 지역이나 키워드를 한 번만 더 알려줄래요?"
 
-        messages.append({"role": "user", "content": user_prompt})
+        ai_text = remove_empty_parentheses(remove_emojis(ai_text))
 
-        response = await client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            temperature=0.7,
-            max_tokens=512,
-        )
-        ai_text = response.choices[0].message.content or ""
-        ai_text = remove_emojis(ai_text) or "죄송해요, 답변을 준비하지 못했어요. 다시 한 번 말씀해주시겠어요?"
-
-        # [ADD] 첫 답변 머리말 붙이기
-        if recommendations:
-            prefix = _first_reply_prefix(recommendations)
-            if prefix:
-                ai_text = f"{prefix}\n\n{ai_text}"
-
-        # 4) TTS 생성
-        tts_text = remove_emojis(ai_text)
+        # 4) TTS 생성 (캐릭터가 읽어줌)
         audio_response = await client.audio.speech.create(
             model="gpt-4o-mini-tts",
             voice=CHARACTER_VOICE[character],
-            input=tts_text
+            input=ai_text
         )
         audio_b64 = base64.b64encode(audio_response.content).decode()
 
-        # 5) 대화 기록 갱신
+        # 5) 대화 기록
         now_kst_iso = datetime.datetime.now(datetime.timezone.utc).isoformat() + "Z"
         with history_lock:
             conversation_history.append({"role": "user", "content": user_text, "ts": now_kst_iso})
@@ -229,7 +200,7 @@ async def process_chat(req):
             if len(conversation_history) > HISTORY_MAX_LEN:
                 conversation_history[:] = conversation_history[-HISTORY_MAX_LEN:]
 
-        # 6) 로그 업로드 (비동기)
+        # 6) 로그 저장 (비동기)
         log_data = {
             "timestamp": now_kst_iso,
             "character": character,
@@ -244,7 +215,7 @@ async def process_chat(req):
         # 응답
         return jsonify({
             "user_text": user_text,
-            "ai_text": remove_empty_parentheses(ai_text),
+            "ai_text": ai_text,
             "audio": audio_b64,
             "tour_recommendations": recommendations
         })
@@ -254,12 +225,9 @@ async def process_chat(req):
         return jsonify({"error": f"Failed to process request: {e}"}), 500
 
 # ======================================================================================
-# 스트리밍 처리
+# 스트리밍 처리 — LLM 스트림 제거, 프리픽스만 토큰으로 먼저/최종 송신
 # ======================================================================================
 async def stream_chat(req):
-    """
-    토큰 단위로 전송 후, 마지막에 최종 패킷(ai_text, audio_b64, tour_recommendations) 송신
-    """
     if 'audio' not in req.files:
         return jsonify(error="오디오 파일이 필요합니다."), 400
 
@@ -268,11 +236,11 @@ async def stream_chat(req):
     character = req.form.get('character', 'kei')
     client = get_openai_client(api_key)
 
-    # 1) STT
+    # 1) STT (모델 통일)
     audio_file = req.files['audio']
     stt_result = await client.audio.transcriptions.create(
         file=("audio.webm", audio_file.read()),
-        model="whisper-1",
+        model="gpt-4o-mini-transcribe",
         response_format="text"
     )
     user_text = stt_result or ""
@@ -281,62 +249,29 @@ async def stream_chat(req):
     search_service = SearchService(openai_api_key=api_key)
     recommendations = search_service.search(user_text, top_k=3, tour_api_key=tour_api_key, openai_api_key=api_key)
 
-    # 3) 스트리밍용 메시지 구성
-    system_prompt = CHARACTER_SYSTEM_PROMPTS[character]
-    with history_lock:
-        messages = [{"role": "system", "content": system_prompt}] + conversation_history[-HISTORY_MAX_LEN:]
-
-        if recommendations:
-            tour_context = "추천된 관광지 정보:\n"
-            for i, rec in enumerate(recommendations, 1):
-                tour_context += f"{i}. {rec['name']} - {rec.get('reason', '')}\n"
-            user_prompt = f"{user_text}\n\n{tour_context}\n\n위 관광지들을 참고해서 친근하게 추천해주세요."
-        else:
-            user_prompt = f"{user_text}\n\n관련 관광지를 찾지 못했습니다. 다른 키워드로 다시 물어봐 달라고 안내해주세요."
-
-        messages.append({"role": "user", "content": user_prompt})
+    # 3) 최종 텍스트는 프리픽스만
+    final_text = _first_reply_prefix(recommendations) if recommendations else "관련 관광지를 아직 찾지 못했어요. 지역이나 키워드를 한 번만 더 알려줄래요?"
+    final_text = remove_empty_parentheses(remove_emojis(final_text))
 
     async def event_stream():
-        # [ADD] 프리픽스 먼저 흘려보내기
-        if recommendations:
-            prefix = _first_reply_prefix(recommendations)
-            if prefix:
-                yield f"event: token\ndata: {json.dumps({'token': prefix + '\\n\\n'}, ensure_ascii=False)}\n\n"
+        # (1) 프리픽스를 우선 토큰으로 내보냄
+        yield f"event: token\ndata: {json.dumps({'token': final_text + '\\n\\n'}, ensure_ascii=False)}\n\n"
 
-        # LLM 스트림
-        stream = await client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            temperature=0.7,
-            max_tokens=512,
-            stream=True
-        )
-        full_text: List[str] = []
-
-        async for chunk in stream:
-            delta = chunk.choices[0].delta.get("content")
-            if delta:
-                full_text.append(delta)
-                yield f"event: token\ndata: {json.dumps({'token': delta}, ensure_ascii=False)}\n\n"
-
-        final_text = "".join(full_text).strip() or "죄송해요, 답변을 준비하지 못했어요."
-        final_text_noemoji = remove_emojis(final_text)
-
-        # TTS 생성
+        # (2) TTS 생성
         audio_b64 = ""
         try:
             audio_response = await client.audio.speech.create(
                 model="gpt-4o-mini-tts",
                 voice=CHARACTER_VOICE[character],
-                input=final_text_noemoji
+                input=final_text
             )
             audio_b64 = base64.b64encode(audio_response.content).decode()
         except Exception:
             pass
 
-        # 최종 패킷
+        # (3) 최종 패킷
         payload = {
-            "ai_text": final_text_noemoji,
+            "ai_text": final_text,
             "audio": audio_b64,
             "tour_recommendations": recommendations
         }
