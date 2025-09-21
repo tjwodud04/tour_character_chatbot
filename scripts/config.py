@@ -15,6 +15,10 @@ VERCEL_BLOB_TOKEN = os.getenv("BLOB_READ_WRITE_TOKEN") or os.getenv("VERCEL_BLOB
 # 코스 인덱스 파일명/개수
 COURSE_INDEX_BLOB_FILENAME = os.getenv("COURSE_INDEX_BLOB_FILENAME", "web_courses_index_selenium.json")
 COURSE_RECOMMEND_COUNT = int(os.getenv("COURSE_RECOMMEND_COUNT", "3"))
+COURSE_INDEX_FULL_URL = os.getenv(
+    "https://hohz7fp3rniqdmon.public.blob.vercel-storage.com/web_courses_index_selenium.json",
+    ""
+)
 
 # TourAPI 설정
 KOREA_TOURISM_API_BASE = "http://apis.data.go.kr/B551011/KorService2"
@@ -55,4 +59,4 @@ CHARACTER_VOICE = {
 }
 
 HISTORY_MAX_LEN = 10
-CACHE_VERSION = "v6"
+CACHE_VERSION = "v7"

@@ -4,6 +4,7 @@ import threading
 import json
 import requests
 import datetime
+import time
 from typing import Dict, Any, List
 from urllib.parse import quote
 
@@ -15,7 +16,7 @@ from scripts.config import (
     CHARACTER_SYSTEM_PROMPTS, CHARACTER_VOICE, HISTORY_MAX_LEN,
     # ▼▼▼ 추가 import ▼▼▼
     VERCEL_BLOB_PUBLIC_BASE, VERCEL_BLOB_TOKEN,
-    COURSE_INDEX_BLOB_FILENAME, COURSE_RECOMMEND_COUNT
+    COURSE_INDEX_BLOB_FILENAME, COURSE_RECOMMEND_COUNT, COURSE_INDEX_FULL_URL
 )
 from scripts.utils import remove_empty_parentheses, remove_emojis
 from scripts.search_service import SearchService
@@ -80,42 +81,54 @@ def _region_key(s: str) -> str:
 
 def _download_blob_json_by_name(blob_filename: str) -> list[dict]:
     """
-    1순위: 퍼블릭 베이스 URL에서 파일 직접 GET
-    2순위: (옵션) RW 토큰 있으면 Vercel Blob API 목록 조회 → downloadUrl
+    퍼블릭 URL이 확정돼 있을 때 가장 단순하고 안정적으로 JSON을 로드하는 함수.
+    우선순위:
+      1) COURSE_INDEX_FULL_URL (있으면 그대로 사용)
+      2) VERCEL_BLOB_PUBLIC_BASE + blob_filename
+    특징:
+      - 2회 재시도(간단 backoff)
+      - Content-Type이 json이 아니어도 text를 직접 json.loads로 파싱 시도
+      - 최종 반환은 list[dict] 형태(단일 dict면 [dict]로 감싸줌)
     """
-    # ----- 1) Public Base 직독 -----
+    # 1) 최종 URL 결정
     base = (VERCEL_BLOB_PUBLIC_BASE or "").rstrip("/")
-    if base:
-        try:
-            public_url = f"{base}/{blob_filename.lstrip('/')}"
-            r = requests.get(public_url, timeout=10)
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            print(f"[Blob] public fetch 실패: {e}")
+    full_url = (COURSE_INDEX_FULL_URL or "").strip()  # config.py에 추가한 값
+    if not full_url:
+        full_url = f"{base}/{blob_filename.lstrip('/')}" if base else ""
 
-    # ----- 2) API 목록 폴백 (토큰 필요) -----
-    if not VERCEL_BLOB_TOKEN:
+    if not full_url:
+        print("[Blob] public base/url 미설정으로 코스 인덱스를 불러올 수 없습니다.")
         return []
-    try:
-        list_url = f"https://api.vercel.com/v2/blobs?prefix={quote(blob_filename)}&limit=10"
-        r = requests.get(list_url, headers={"Authorization": f"Bearer {VERCEL_BLOB_TOKEN}"}, timeout=10)
-        r.raise_for_status()
-        items = (r.json().get("blobs") or [])
-        match = next((it for it in items if it.get("pathname") == blob_filename or it.get("name") == blob_filename), None)
-        if not match:
-            match = items[0] if items else None
-        if not match:
+
+    # 2) 요청(간단 재시도)
+    last_err: Exception | None = None
+    for attempt in range(2):  # 총 2회 시도
+        try:
+            r = requests.get(full_url, timeout=12)
+            r.raise_for_status()
+
+            # 3) JSON 파싱 (Content-Type이 application/json이 아닐 수 있음)
+            ctype = (r.headers.get("Content-Type") or "").lower()
+            if "json" in ctype:
+                data: Any = r.json()
+            else:
+                txt = r.text or ""
+                data = json.loads(txt)
+
+            # 4) 일관 반환(list[dict])
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict):
+                return [data]
+            # 다른 타입이면 빈 리스트 처리
             return []
-        download_url = match.get("downloadUrl") or match.get("url")
-        if not download_url:
-            return []
-        r2 = requests.get(download_url, timeout=15)
-        r2.raise_for_status()
-        return r2.json()
-    except Exception as e:
-        print(f"[Blob] 코스 인덱스 로드 실패: {e}")
-        return []
+        except Exception as e:
+            last_err = e
+            # 네트워크 버벅임 대비 짧은 backoff
+            time.sleep(0.6)
+
+    print(f"[Blob] public fetch 실패: {last_err}")
+    return []
 
 def pick_courses_for_region(region: str, n: int = COURSE_RECOMMEND_COUNT) -> list[dict]:
     """
