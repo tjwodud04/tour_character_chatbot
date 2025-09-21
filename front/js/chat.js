@@ -335,6 +335,18 @@ let live2dManager;  // Live2D 관리자 전역 변수
 let audioManager;   // 오디오 관리자 전역 변수
 let chatManager;    // 채팅 관리자 전역 변수
 
+// [NEW] 첫 응답 제어용 상태 & 간단 음성합성
+let lastRegion = "";
+let firstAiReplied = false;
+function speakInterim(text) {
+  try {
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'ko-KR';
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
+  } catch(e){ console.warn('speechSynthesis not available:', e); }
+}
+
 // 립싱크 업데이트 함수
 function updateLipSync() {
     if (audioManager && audioManager.isRecording) {
@@ -375,6 +387,64 @@ document.addEventListener('DOMContentLoaded', async () => {
     console.log('Application initialization completed');
 });
 
+// 예/아니오 버튼
+function renderYesNoButtons(onYes, onNo) {
+  const wrap = document.createElement('div');
+  wrap.style.display = 'flex';
+  wrap.style.gap = '8px';
+  wrap.style.marginTop = '10px';
+
+  const yesBtn = document.createElement('button');
+  yesBtn.textContent = '예';
+  yesBtn.style.padding = '6px 12px';
+  yesBtn.style.borderRadius = '8px';
+  yesBtn.style.border = '1px solid #ddd';
+  yesBtn.style.cursor = 'pointer';
+  yesBtn.onclick = onYes;
+
+  const noBtn = document.createElement('button');
+  noBtn.textContent = '아니요';
+  noBtn.style.padding = '6px 12px';
+  noBtn.style.borderRadius = '8px';
+  noBtn.style.border = '1px solid #ddd';
+  noBtn.style.cursor = 'pointer';
+  noBtn.onclick = onNo;
+
+  wrap.appendChild(yesBtn);
+  wrap.appendChild(noBtn);
+  return wrap;
+}
+
+// 코스 카드 렌더
+function renderCourseCards(courses, regionLabel) {
+  if (!Array.isArray(courses) || courses.length === 0) return "";
+
+  const header = `<div class="tour-card-description" style="margin:6px 0 10px 0;">
+    간략한 추천 관광 코스는 <b>${_esc(regionLabel)}</b> 코스가 있으니 아래 내용을 확인해줘
+  </div>`;
+
+  const body = courses.map(c => {
+    const title = _esc(c.title || "코스");
+    const img   = c.thumbnail || "";
+    const link  = c.link || "";
+    const desc  = _esc(c.desc || "");
+    return `
+      <div class="tour-card">
+        <div class="tour-card-content">
+          ${img ? `<div class="tour-card-image"><img src="${img}" alt="${title}" onerror="this.style.display='none'"></div>` : ""}
+          <div class="tour-card-info">
+            <div class="tour-card-title">${title}</div>
+            ${desc ? `<div class="tour-card-description">${desc}</div>` : ""}
+            ${link ? `<div class="tour-card-link"><a href="${link}" target="_blank" rel="noopener">🔗 코스 상세 보기</a></div>` : ""}
+          </div>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  return `<div class="tour-cards-container">${header}${body}</div>`;
+}
+
 // 녹음 버튼 클릭 시 동작
 async function handleRecording() {
     const recordButton = document.getElementById('recordButton');
@@ -403,6 +473,26 @@ async function handleRecording() {
             const audioBlob = await audioManager.stopRecording();
             if (!audioBlob) throw new Error('No audio data recorded');
 
+            // [NEW] 사용자 임시 말풍선(곧 STT 결과로 대체)
+            const pendingUserEl = document.createElement('div');
+            pendingUserEl.className = 'message user-message';
+            pendingUserEl.innerHTML = `
+              <div class="message-bubble">
+                <div class="message-content">… (음성 인식 중)</div>
+                <span class="message-time">${new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})}</span>
+              </div>`;
+            chatManager.chatHistory.appendChild(pendingUserEl);
+            chatManager.chatHistory.scrollTop = chatManager.chatHistory.scrollHeight;
+
+            // [NEW] 중간 멘트(텍스트+음성)로 시간 벌기
+            const interim1 = "~ 정보를 알려달라는 거지!";
+            chatManager.addMessage('ai', interim1);
+            speakInterim(interim1);
+
+            const interim2 = "찾고 있으니까 조금만 기다려줘";
+            chatManager.addMessage('ai', interim2);
+            speakInterim(interim2);
+
             console.log('Sending audio to server for processing');
             let response;
             try {
@@ -412,13 +502,52 @@ async function handleRecording() {
                 response = await chatManager.sendAudioToServer(audioBlob);
             }
 
+            // STT 결과로 임시 사용자 말풍선 대체
             if (response.user_text) {
-                chatManager.addMessage('user', response.user_text);
+                const contentEl = pendingUserEl.querySelector('.message-content');
+                if (contentEl) contentEl.textContent = response.user_text;
             }
 
             if (response.ai_text) {
-                // 4번째 인자로 전체 payload 전달 → 카드까지 렌더
+                // AI 본문 + (있다면) 관광지 카드
                 chatManager.addMessage('ai', response.ai_text, null, response);
+
+                // 첫 AI 응답에 지역 저장 + 버튼 배치
+                if (!firstAiReplied && Array.isArray(response.tour_recommendations) && response.tour_recommendations.length > 0) {
+                    const metaRegion = response.tour_recommendations[0]?.metadata?.region || "";
+                    if (metaRegion) lastRegion = metaRegion;
+
+                    const lastMsg = chatManager.chatHistory.lastElementChild;
+                    const mount = lastMsg?.querySelector('.message-bubble');
+                    if (mount) {
+                        const row = renderYesNoButtons(async () => {
+                            // 예: 코스 3개 불러오기
+                            try {
+                                chatManager.addMessage('user', '예');
+                                const res = await fetch(`/scripts/courses?region=${encodeURIComponent(lastRegion)}&n=3`);
+                                const j = await res.json();
+                                const cardsHTML = renderCourseCards(j.courses || [], lastRegion || '지역');
+
+                                // 카드가 깨지지 않도록: 먼저 빈 AI 말풍선 추가 후 그 안에 직접 삽입
+                                chatManager.addMessage('ai', '간략한 추천 관광 코스를 정리했어!');
+                                const aiLast = chatManager.chatHistory.lastElementChild;
+                                const mc = aiLast?.querySelector('.message-content');
+                                if (mc && cardsHTML) {
+                                  mc.insertAdjacentHTML('beforeend', cardsHTML);
+                                }
+                            } catch (err) {
+                                console.error(err);
+                                chatManager.addMessage('system', '코스 정보를 불러오지 못했어요.');
+                            }
+                            row.remove();
+                        }, () => {
+                            chatManager.addMessage('user', 'अ니요'); // 오타 방지: '아니요'
+                            row.remove();
+                        });
+                        mount.appendChild(row);
+                    }
+                    firstAiReplied = true;
+                }
 
                 if (response.audio) {
                     console.log('Starting audio playback');
@@ -520,7 +649,7 @@ async function sendAudioToServerStream(audioBlob, characterType = 'kei') {
 // [ADD] 안전한 HTML 이스케이프
 function _esc(s){return (s||"").replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
 
-// [MOD] 제안 카드 HTML (홈페이지+지도 링크 동시 노출, reason 폴백 추가)
+// [MOD] 제안 카드 HTML (홈페이지 링크 노출, reason 폴백 추가)
 function _renderTourCards(recommendations){
   if(!recommendations || !Array.isArray(recommendations) || recommendations.length === 0) return "";
 
@@ -529,9 +658,7 @@ function _renderTourCards(recommendations){
     const reason = _esc(place.reason || "설명 없음");
     const address = _esc(place.address || "주소 정보 없음");
     const imageUrl = place.image_url || "";
-    const homepage = place.homepage || "";   // ✅ TourAPI homepage 그대로 사용
-    // const mapUrl = place.map_url || "";      // ✅ 백엔드에서 만들어준 지도 링크
-
+    const homepage = place.homepage || "";
 
     return `
       <div class="tour-card">

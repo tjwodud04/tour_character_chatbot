@@ -6,6 +6,7 @@ import requests
 import datetime
 import time
 from typing import Dict, Any, List, Optional
+from urllib.parse import quote
 
 from flask import jsonify, abort, request, Response, stream_with_context
 from openai import AsyncOpenAI
@@ -13,7 +14,8 @@ from openai import AsyncOpenAI
 from scripts.config import (
     VERCEL_TOKEN, VERCEL_PROJ_ID,
     CHARACTER_SYSTEM_PROMPTS, CHARACTER_VOICE,
-    HISTORY_MAX_LEN
+    HISTORY_MAX_LEN,
+    VERCEL_BLOB_TOKEN, COURSE_INDEX_BLOB_FILENAME, COURSE_RECOMMEND_COUNT
 )
 from scripts.utils import (
     remove_empty_parentheses, markdown_to_html_links,
@@ -52,6 +54,107 @@ def upload_log_to_vercel_blob(blob_name: str, data: dict):
         print(f"Vercel Blob 로그 업로드 예외: {e}")
 
 # ======================================================================================
+# 신규: 첫 답변 머리말 & 지역 코스(Blob) 유틸
+# ======================================================================================
+def _first_reply_prefix(recommendations: list[dict]) -> str:
+    """
+    '<지역> 관광지(이름1, 이름2, 이름3)를 추천해요. 조금 더 자세한 내용은 아래의 카드를 참고해주세요.
+     원하시면 지역과 관련된 관광 코스도 추천해줄 수 있는데, 보여드릴까요?'
+    """
+    if not recommendations:
+        return ""
+    names = [ (rec.get("name") or "").strip() for rec in recommendations if rec.get("name") ]
+    names = names[:3]
+    region = (recommendations[0].get("metadata") or {}).get("region") or ""
+    region_part = f"{region} " if region else ""
+    if names:
+        names_str = ", ".join(names)
+        return (
+            f"{region_part}관광지({names_str})를 추천해요. "
+            f"조금 더 자세한 내용은 아래의 카드를 참고해주세요.\n\n"
+            f"원하시면 지역과 관련된 관광 코스도 추천해줄 수 있는데, 보여드릴까요?"
+        )
+    return (
+        f"{region_part}관광지를 추천해요. "
+        f"조금 더 자세한 내용은 아래의 카드를 참고해주세요.\n\n"
+        f"원하시면 지역과 관련된 관광 코스도 추천해줄 수 있는데, 보여드릴까요?"
+    )
+
+def _region_key(s: str) -> str:
+    if not s: return ""
+    s = s.replace("특별자치도","").replace("광역시","").replace("특별시","").strip()
+    return s
+
+def _download_blob_json_by_name(blob_filename: str) -> list[dict]:
+    """
+    Vercel Blob API(v2) 목록 조회 → filename 기준으로 downloadUrl 획득 → JSON 로드
+    """
+    if not VERCEL_BLOB_TOKEN:
+        raise RuntimeError("VERCEL_BLOB_TOKEN 이(가) 설정되지 않았습니다.")
+    try:
+        list_url = f"https://api.vercel.com/v2/blobs?prefix={quote(blob_filename)}&limit=10"
+        r = requests.get(list_url, headers={"Authorization": f"Bearer {VERCEL_BLOB_TOKEN}"}, timeout=10)
+        r.raise_for_status()
+        items = (r.json().get("blobs") or [])
+        match = next((it for it in items if it.get("pathname") == blob_filename or it.get("name") == blob_filename), None)
+        if not match:
+            match = items[0] if items else None
+        if not match:
+            return []
+        download_url = match.get("downloadUrl") or match.get("url")
+        if not download_url:
+            return []
+        r2 = requests.get(download_url, timeout=15)
+        r2.raise_for_status()
+        ctype = (r2.headers.get("Content-Type") or "").lower()
+        return r2.json() if ctype.startswith("application/json") else []
+    except Exception as e:
+        print(f"[Blob] 코스 인덱스 로드 실패: {e}")
+        return []
+
+def pick_courses_for_region(region: str, n: int = COURSE_RECOMMEND_COUNT) -> list[dict]:
+    """
+    web_courses_index_selenium.json 예시 스키마(탄력적 매핑):
+    [{"region":"제주","title":"...", "thumb":"...", "url":"...", "desc":"..."}, ...]
+    → [{title, thumbnail, link, desc}]로 정규화
+    """
+    region = _region_key(region)
+    raw = _download_blob_json_by_name(COURSE_INDEX_BLOB_FILENAME)
+    if not raw:
+        return []
+
+    def _get(d, keys, default=""):
+        for k in keys:
+            if k in d and d[k]:
+                return d[k]
+        return default
+
+    cand = []
+    for it in raw:
+        r = _get(it, ["region","시도","지역","area"], "")
+        if not r:
+            continue
+        rk = _region_key(str(r))
+        if (region and region in rk) or (rk and rk in region) or (region == rk):
+            cand.append(it)
+
+    cand = cand[: max(n, 1)]
+
+    out = []
+    for it in cand[:n]:
+        title = _get(it, ["title","name","코스명","course","코스","제목"], "코스")
+        img   = _get(it, ["thumb","thumbnail","image","이미지","썸네일"], "")
+        url   = _get(it, ["url","link","href","페이지","상세링크"], "")
+        desc  = _get(it, ["desc","description","요약","소개"], "")
+        out.append({
+            "title": title,
+            "thumbnail": img,
+            "link": url,
+            "desc": desc
+        })
+    return out
+
+# ======================================================================================
 # 메인 처리(관광지 추천 채팅)
 # ======================================================================================
 async def process_chat(req):
@@ -68,12 +171,12 @@ async def process_chat(req):
         audio_file = req.files['audio']
         stt_result = await client.audio.transcriptions.create(
             file=("audio.webm", audio_file.read()),
-            model="gpt-4o-mini-transcribe", # whisper-1
+            model="gpt-4o-mini-transcribe",  # whisper-1 대체
             response_format="text"
         )
         user_text = stt_result or ""
 
-        # 2) 관광지 검색  ✅ API 키 주입
+        # 2) 관광지 검색
         search_service = SearchService(openai_api_key=api_key)
         recommendations = search_service.search(
             user_text, top_k=3, tour_api_key=tour_api_key, openai_api_key=api_key
@@ -102,6 +205,12 @@ async def process_chat(req):
         )
         ai_text = response.choices[0].message.content or ""
         ai_text = remove_emojis(ai_text) or "죄송해요, 답변을 준비하지 못했어요. 다시 한 번 말씀해주시겠어요?"
+
+        # [ADD] 첫 답변 머리말 붙이기
+        if recommendations:
+            prefix = _first_reply_prefix(recommendations)
+            if prefix:
+                ai_text = f"{prefix}\n\n{ai_text}"
 
         # 4) TTS 생성
         tts_text = remove_emojis(ai_text)
@@ -168,7 +277,7 @@ async def stream_chat(req):
     )
     user_text = stt_result or ""
 
-    # 2) 관광지 검색  ✅ API 키 주입
+    # 2) 관광지 검색
     search_service = SearchService(openai_api_key=api_key)
     recommendations = search_service.search(user_text, top_k=3, tour_api_key=tour_api_key, openai_api_key=api_key)
 
@@ -188,6 +297,12 @@ async def stream_chat(req):
         messages.append({"role": "user", "content": user_prompt})
 
     async def event_stream():
+        # [ADD] 프리픽스 먼저 흘려보내기
+        if recommendations:
+            prefix = _first_reply_prefix(recommendations)
+            if prefix:
+                yield f"event: token\ndata: {json.dumps({'token': prefix + '\\n\\n'}, ensure_ascii=False)}\n\n"
+
         # LLM 스트림
         stream = await client.chat.completions.create(
             model="gpt-4o",

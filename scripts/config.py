@@ -42,4 +42,9 @@ CHARACTER_VOICE = {
 }
 
 HISTORY_MAX_LEN = 10 
-CACHE_VERSION = "v5"
+CACHE_VERSION = "v6"
+
+# --- Vercel Blob 읽기용 ---
+VERCEL_BLOB_TOKEN = os.getenv("VERCEL_BLOB_TOKEN") or os.getenv("BLOB_READ_WRITE_TOKEN")
+COURSE_INDEX_BLOB_FILENAME = "web_courses_index_selenium.json"
+COURSE_RECOMMEND_COUNT = 3

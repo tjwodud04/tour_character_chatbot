@@ -20,3 +20,18 @@ def register_routes(app):
     @app.route('/scripts/chat_stream', methods=['POST'])
     async def chat_stream():
         return await stream_chat(request)
+
+    # 지역별 관광 코스(Blob JSON) 제공
+    @app.route('/scripts/courses', methods=['GET'])
+    def get_courses():
+        """?region=제주&n=3  →  { region, count, courses:[{title,thumbnail,link,desc}, ...] }"""
+        region = (request.args.get('region') or "").strip()
+        n = int(request.args.get('n') or 3)
+        if not region:
+            return jsonify({"error":"region required"}), 400
+        try:
+            from scripts.services import pick_courses_for_region
+            courses = pick_courses_for_region(region, n)
+            return jsonify({"region": region, "count": len(courses), "courses": courses})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
