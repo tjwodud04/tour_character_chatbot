@@ -1,7 +1,7 @@
-# data_service.py
+# scripts/data_service.py
 # 파이프라인: 질의 → LLM으로 지역/대분류(cat1) 1개씩 추출
 #          → areaCode/sigunguCode 고정(fast mapper) → areaBasedList2(대표이미지 보장 정렬)
-#          → cat1 필터 → 휴리스틱 클린 → 무작위 N개
+#          → cat1 필터 → contentTypeId=25(여행코스) 차단(+화이트리스트 재쿼리) → 휴리스틱 클린
 #          → detailCommon2로 overview/homepage 보강(+1문장 요약)
 #          → detailImage2 폴백 → 최종 카드 스키마 반환
 
@@ -32,7 +32,6 @@ _REGION_HINTS = [
     "제주","강원특별자치도","전북특별자치도","제주특별자치도"
 ]
 
-# 지역명 간단 정규화 테이블(광역 단위 위주)
 _NORMALIZE_REGION = {
     "제주도": "제주", "제주특별자치도": "제주",
     "서울특별시": "서울", "부산광역시": "부산", "대구광역시": "대구",
@@ -44,7 +43,9 @@ _NORMALIZE_REGION = {
     "경상북도": "경북", "경상남도": "경남",
 }
 
-# ----------------------------- 유틸 -----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+# 이미지/링크 유틸
+# ──────────────────────────────────────────────────────────────────────────────
 
 def _compose_full_address(addr1: str, addr2: str) -> str:
     a1, a2 = (addr1 or "").strip(), (addr2 or "").strip()
@@ -68,7 +69,7 @@ def _head_ok(url: str) -> bool:
         return True
     host = urlparse(url).netloc.lower().split(":")[0]
     if host in IMAGE_HEAD_WHITELIST_NOHEAD:
-        return True  # 일부 서버는 HEAD 응답이 부정확 → 스킵
+        return True
     try:
         r = requests.head(url, allow_redirects=True, timeout=5)
         if r.status_code >= 400:
@@ -95,7 +96,6 @@ def _normalize_homepage(raw: str) -> str:
     t = (raw or "").strip()
     if not t:
         return ""
-    # TourAPI homepage는 a 태그로 내려오는 경우가 많음 → href만 추출
     m = re.search(r'href=["\']([^"\']+)["\']', t, re.I)
     if m:
         t = m.group(1).strip()
@@ -128,7 +128,9 @@ class _ImageCache:
             for k, _ in old: self.store.pop(k, None)
         self.store[key] = (url, time.time())
 
-# ----------------------------- 서비스 -----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+# 서비스
+# ──────────────────────────────────────────────────────────────────────────────
 
 class DataService:
     """OpenAI로 (region, cat1) 추출 → 지역코드화 → TourAPI 목록/상세 → 카드 스키마 생성"""
@@ -164,9 +166,8 @@ class DataService:
         head = text[:300].replace("\n"," ") if text else ""
         raise ValueError(f"Non-JSON response (status={resp.status_code}, ct='{ct}'). Body head: {head}")
 
-    # --- 신규: 키워드로 areaCode 힌트 추출 ---
+    # --- 키워드로 areaCode 힌트 추출 (옵션) ---
     def _area_hint_from_keyword(self, q: str) -> Tuple[Optional[str], Optional[str]]:
-        """query로 searchKeyword2를 1~3건 조회해 areaCode/sigunguCode 힌트 추출"""
         if not (q or "").strip():
             return None, None
         url = f"{self.base_url}/searchKeyword2"
@@ -189,15 +190,19 @@ class DataService:
             pass
         return None, None
 
-    # --- 1) (region, cat1) 추출 ---
+    # --- 1) (region, cat1) 추출  ※여기서 'C01 기본 금지' 규칙을 프롬프트에 못박음 ---
     def _extract_region_and_cat1(self, user_query: str) -> Tuple[str, Optional[str]]:
         try:
             cat_list = "\n".join([f"- {c['code']} : {c['name']}" for c in CAT1_CHOICES])
             prompt = f"""
 다음 한국어 요청에서
-1) 정확한 지역명 1개 (시/도/광역시/특별시 단위 또는 시/군 단위)
+1) 정확한 지역명 1개 (시/도/광역시/특별시 또는 시/군 단위)
 2) 아래 목록 중 가장 가까운 대분류 cat1 코드 1개
 를 JSON으로만 출력하세요.
+
+규칙:
+- 사용자가 '코스/일정/루트/동선/투어'를 명시한 경우에만 cat1=C01(추천코스)을 선택한다.
+- 그 외에는 cat1=C01을 절대 선택하지 않고, A01~A05 또는 B02 중에서만 선택한다.
 
 대분류 목록:
 {cat_list}
@@ -220,12 +225,14 @@ class DataService:
             )
             data = json.loads(resp.choices[0].message.content or "{}")
             region = (data.get("region") or "").strip()
-            # 광역 정규화(강원특별자치도→강원 등)
             region = _NORMALIZE_REGION.get(region, region)
             cat1   = (data.get("cat1") or "").strip().upper()
-            if cat1 not in {c["code"] for c in CAT1_CHOICES}: cat1 = None
+            if cat1 not in {c["code"] for c in CAT1_CHOICES}:
+                cat1 = None
+            # 최후 방어: 여전히 C01이면 무효화 (검색단은 관광지 전용)
+            if cat1 == "C01":
+                cat1 = None
 
-            # 지역 힌트가 전혀 없으면 키워드에 포함된 광역 키워드로 보완
             if not region:
                 t = (user_query or "").strip()
                 region = next((w for w in _REGION_HINTS if w in t), "")
@@ -236,9 +243,8 @@ class DataService:
             region = next((w for w in _REGION_HINTS if w in t), "")
             return region, None
 
-    # --- 1-1) 지역명 → areaCode 해석 (폴백 전용: 기존 TourAPI 기반) ---
-    def _resolve_area_code(
-        self, region_name: str, tour_api_key: str = None
+    # --- 1-1) (폴백) TourAPI로 광역 areaCode 해석 ---
+    def _resolve_area_code(self, region_name: str, tour_api_key: str = None
         ) -> Tuple[Optional[str], Optional[str]]:
         if not region_name:
             return None, None
@@ -252,12 +258,10 @@ class DataService:
             r = requests.get(url, params=p, timeout=self.timeout); r.raise_for_status()
             items = self._safe_json(r).get("response",{}).get("body",{}).get("items",{}).get("item",[]) or []
             name = (region_name or "").replace("특별자치도","").replace("광역시","").replace("특별시","").replace("도","").strip()
-
             cand = [it for it in items if name and name in (it.get("name") or "")]
             if not cand:
-                print(f"[DEBUG] 지역명 '{region_name}' -> 정규화 '{name}' -> 매칭 실패, 지역 힌트 사용 예정")
+                print(f"[DEBUG] 지역명 '{region_name}' -> 정규화 '{name}' -> 매칭 실패")
                 return None, None
-
             code = (cand[0].get("code") if cand else None)
             print(f"[DEBUG] 지역명 '{region_name}' -> 정규화 '{name}' -> 코드 '{code}'")
             return (str(code) if code else None), None
@@ -266,24 +270,15 @@ class DataService:
 
     # --- 2) 상세 정보/요약/이미지 ---
     def _fetch_detail_common(
-        self,
-        content_id: str,
-        tour_api_key: str = None,
+        self, content_id: str, tour_api_key: str = None,
     ) -> Tuple[str, str, Optional[float], Optional[float]]:
-        """
-        overview, homepage, 좌표(mapx/mapy)를 반환
-        """
         if not content_id:
             return "", "", None, None
-
         url = f"{self.base_url}/detailCommon2"
         params = {
             "serviceKey": self._get_api_key(tour_api_key),
-            "numOfRows": 1,
-            "pageNo": 1,
-            "MobileOS": "ETC",
-            "MobileApp": "TourAPI",
-            "_type": "json",
+            "numOfRows": 1, "pageNo": 1,
+            "MobileOS": "ETC", "MobileApp": "TourAPI", "_type": "json",
             "contentId": content_id,
         }
         try:
@@ -291,16 +286,11 @@ class DataService:
             r.raise_for_status()
             item = (
                 self._safe_json(r)
-                .get("response", {})
-                .get("body", {})
-                .get("items", {})
-                .get("item", [{}])
+                .get("response", {}).get("body", {}).get("items", {}).get("item", [{}])
             )[0]
-
             overview = (item.get("overview") or "").strip()
             homepage = _normalize_homepage(item.get("homepage") or "")
-            mx = item.get("mapx")
-            my = item.get("mapy")
+            mx, my = item.get("mapx"), item.get("mapy")
             mapx = float(mx) if mx not in (None, "") else None
             mapy = float(my) if my not in (None, "") else None
             return overview, homepage, mapx, mapy
@@ -311,11 +301,8 @@ class DataService:
         url = f"{self.base_url}/detailImage2"
         p = {
             "serviceKey": self._get_api_key(tour_api_key),
-            "numOfRows": 1,
-            "pageNo": 1,
-            "MobileOS": "ETC",
-            "MobileApp": "TourAPI",
-            "_type": "json",
+            "numOfRows": 1, "pageNo": 1,
+            "MobileOS": "ETC", "MobileApp": "TourAPI", "_type": "json",
             "contentId": content_id,
         }
         try:
@@ -323,10 +310,7 @@ class DataService:
             r.raise_for_status()
             items = (
                 self._safe_json(r)
-                .get("response", {})
-                .get("body", {})
-                .get("items", {})
-                .get("item", [])
+                .get("response", {}).get("body", {}).get("items", {}).get("item", [])
             )
             if isinstance(items, dict):
                 items = [items]
@@ -339,7 +323,6 @@ class DataService:
             pass
         return ""
 
-    # --- 신규: 홈페이지/지도 폴백 링크 ---
     def _fallback_link(self, title: str, addr: str) -> dict:
         q = (title or addr or "").strip()
         if not q:
@@ -435,7 +418,7 @@ class DataService:
         }
         if area_code: params["areaCode"] = area_code
         if sigungu_code: params["sigunguCode"] = sigungu_code
-        if cat1: params["cat1"] = cat1
+        if cat1: params["cat1"] = cat1  # ※ 여기서 C01은 이미 금지 상태
 
         print(f"[DEBUG] TourAPI 호출 매개변수: areaCode={area_code}, sigunguCode={sigungu_code}, cat1={cat1}, numOfRows={num_rows}")
 
@@ -453,6 +436,29 @@ class DataService:
             print("[TourAPI] areaBasedList2 호출 오류:", e)
             items = []
 
+        # (2-0) 데이터 레벨 1차 차단: 여행코스(contentTypeId=25) 제거
+        def _not_course(it: Dict) -> bool:
+            ctid = str(it.get("contenttypeid") or it.get("contentTypeId") or "").strip()
+            return ctid != "25"
+
+        items = [it for it in items if _not_course(it)]
+
+        # (2-0b) 관광지가 하나도 없으면 화이트리스트 contentTypeId로 재쿼리(12/14/28/32/38/39)
+        if not items:
+            WHITELIST_CTIDS = ["12","14","28","32","38","39"]
+            merged: List[Dict] = []
+            for ctid in WHITELIST_CTIDS:
+                p2 = dict(params); p2["contentTypeId"] = ctid
+                try:
+                    r2 = requests.get(url, params=p2, timeout=self.timeout); r2.raise_for_status()
+                    payload2 = self._safe_json(r2)
+                    items2 = payload2.get("response",{}).get("body",{}).get("items",{}).get("item",[]) or []
+                    if not isinstance(items2, list): items2 = [items2]
+                    merged.extend(items2)
+                except Exception:
+                    pass
+            items = merged
+
         # (2-1) 휴리스틱 정리
         items = self._clean_items(items)
 
@@ -461,6 +467,9 @@ class DataService:
             items = [it for it in items if str(it.get("areacode") or "").strip() == str(area_code)]
         if sigungu_code:
             items = [it for it in items if str(it.get("sigungucode") or it.get("sigunguCode") or "").strip() == str(sigungu_code)]
+
+        # (2-3) 혹시 섞여 들어온 C01(cat1)이 있으면 제거 (이중 안전장치)
+        items = [it for it in items if (it.get("cat1") or "").strip().upper() != "C01"]
 
         if not items:
             return []
@@ -508,6 +517,7 @@ class DataService:
                     "mapy": mapy,
                     "areacode": it.get("areacode"),
                     "sigungucode": it.get("sigungucode") or it.get("sigunguCode"),
+                    "contenttypeid": it.get("contenttypeid") or it.get("contentTypeId"),
                 }
             })
 

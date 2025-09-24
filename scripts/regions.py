@@ -35,6 +35,15 @@ AREA_NAME_TO_CODE = {
 #    (질문에서 제공된 공식 목록을 그대로 반영)
 # ──────────────────────────────────────────────────────────────────────────────
 SIGUNGU_BY_AREA = {
+    # 서울특별시
+    "1": { 
+        "강남구": "1", "강동구": "2", "강북구": "3", "강서구": "4", "관악구": "5", "광진구": "6",        "구로구": "7", "금천구": "8", "노원구": "9",       "도봉구": "10","동대문구": "11", "동작구": "12",
+        "마포구": "13","서대문구": "14", "서초구": "15",
+        "성동구": "16", "성북구": "17", "송파구": "18",
+        "양천구": "19", "영등포구": "20", "용산구": "21",
+        "은평구": "22", "종로구": "23", "중구": "24",
+        "중랑구": "25",
+    },
     # 31) 경기도
     "31": {
         "가평": "1", "고양": "2", "과천": "3", "광명": "4", "광주": "5", "구리": "6", "군포": "7",
@@ -102,6 +111,25 @@ SIGUNGU_BY_AREA = {
     },
 }
 
+# (선택) 유명 지명 → 구 매핑(결정론 소사전)
+SEOUL_POI_ALIAS_TO_GU = {
+    "명동": "중구",
+    "남산": "중구",     # (상황에 따라 '용산구'도 가능하지만, 명동/남산타워 문의는 중구 의도 빈도↑)
+    "남산타워": "중구",
+    "N서울타워": "중구",
+    "홍대": "마포구",
+    "홍대입구": "마포구",
+    "연남동": "마포구",
+    "합정": "마포구",
+    "강남역": "강남구",
+    "가로수길": "강남구",
+    "코엑스": "강남구",
+    "남대문시장": "중구",
+    "동대문": "동대문구",
+    "DDP": "중구",
+    "이태원": "용산구",
+}
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 3) 정규화 & 빠른 매핑 유틸
 # ──────────────────────────────────────────────────────────────────────────────
@@ -126,10 +154,12 @@ def strip_suffix(name: str) -> str:
     return x.strip()
 
 
-def fast_area_sigungu(name: str, prefer_area: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+def fast_area_sigungu(name: Optional[str],
+                      prefer_area: Optional[str] = None
+                     ) -> Tuple[Optional[str], Optional[str]]:
     """
     입력된 지역명을 정규화 후 (areaCode, sigunguCode)로 매핑.
-    - name: '경주', '가평군', '경기도', '강원특별자치도' 등
+    - name: '경주', '가평군', '경기도', '서울 중구', '홍대' 등
     - prefer_area: 모호 지명(예: '고성') 분해석 힌트. '강원'/'경남' 또는 '32'/'36' 등.
       제공 시 해당 광역의 시군 테이블을 우선 탐색합니다.
 
@@ -142,39 +172,75 @@ def fast_area_sigungu(name: str, prefer_area: Optional[str] = None) -> Tuple[Opt
     if not name:
         return None, None
 
-    # 0) 힌트 정규화
+    # 0) 힌트 정규화 → 내부 키로
     prefer_area_key: Optional[str] = None
     if prefer_area:
         p = strip_suffix(prefer_area)
+        # '경기'같은 명칭 → 코드, 혹은 이미 코드라면 그대로
         prefer_area_key = AREA_NAME_TO_CODE.get(p, p if p in SIGUNGU_BY_AREA else None)
 
     # 1) 입력 정규화
-    n = strip_suffix(name)
+    raw = name.strip()
+    n = strip_suffix(raw)
 
-    # 2) 광역 직접 매칭
+    # 2) "서울 중구" 같은 복합 표기 우선 처리
+    #   - 문장 내에 광역이 보이면 해당 광역의 시군 테이블에서 구/시 매칭 시도
+    for area_name, acode in AREA_NAME_TO_CODE.items():
+        if area_name in n:
+            # 광역명 제거하고 남은 토큰들을 시군구로 간주하여 탐색
+            rest = n.replace(area_name, "").strip()
+            if rest:
+                table = SIGUNGU_BY_AREA.get(acode, {})
+                # 정확 일치
+                if rest in table:
+                    return acode, table[rest]
+                # 부분 포함(예: '중구 쇼핑' → '중구')
+                for sgg_name, sgg_code in table.items():
+                    if sgg_name in rest:
+                        return acode, sgg_code
+            # 구가 없으면 광역만 확정
+            return acode, None
+
+    # 3) 광역 직접 매칭 (예: '경기도', '강원특별자치도')
     if n in AREA_NAME_TO_CODE:
         return AREA_NAME_TO_CODE[n], None
 
-    # 3) (옵션) 힌트가 있으면 해당 광역 먼저 탐색
+    # 4) (옵션) prefer_area 힌트가 있으면 해당 광역 먼저 탐색
     if prefer_area_key and prefer_area_key in SIGUNGU_BY_AREA:
         table = SIGUNGU_BY_AREA[prefer_area_key]
+        # 정확 일치
         if n in table:
             return prefer_area_key, table[n]
+        # 부분 포함 보조
+        for sgg_name, sgg_code in table.items():
+            if sgg_name in n:
+                return prefer_area_key, sgg_code
 
-    # 4) 모든 광역의 시군 테이블에서 탐색
-    hit_area: Optional[str] = None
-    hit_sgg: Optional[str] = None
+    # 5) 모든 광역의 시군 테이블에서 탐색 (정확 일치 → 부분 포함 순)
     for area_code, table in SIGUNGU_BY_AREA.items():
         if n in table:
-            hit_area, hit_sgg = area_code, table[n]
-            break
+            return area_code, table[n]
+    for area_code, table in SIGUNGU_BY_AREA.items():
+        for sgg_name, sgg_code in table.items():
+            if sgg_name in n:
+                return area_code, sgg_code
 
-    if hit_area:
-        return hit_area, hit_sgg
+    # 6) 서울 POI alias → 구 매핑 (명동/홍대/남산 등)
+    sg_map_seoul = SIGUNGU_BY_AREA.get("1", {})
+    gu_alias = SEOUL_POI_ALIAS_TO_GU.get(n)
+    if not gu_alias:
+        # 부분 포함 alias(예: '명동 쇼핑')
+        for k, v in SEOUL_POI_ALIAS_TO_GU.items():
+            if k in n:
+                gu_alias = v
+                break
+    if gu_alias:
+        sgg_code = sg_map_seoul.get(gu_alias)
+        if sgg_code:
+            return "1", sgg_code
 
-    # 5) 실패
+    # 7) 실패
     return None, None
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 4) 편의: areaCode로 다시 광역/시군명을 얻고 싶을 때 (선택 사용)
