@@ -234,7 +234,8 @@ async def stream_chat(req):
         # 1) 메타: region/cat1 힌트
         yield f"event: meta\ndata: {json.dumps({'region': region_hint or '', 'cat1': cat1_hint or ''}, ensure_ascii=False)}\n\n"
         # 2) 프리픽스 토큰: 완성 텍스트를 한 번에 흘려 UI 스켈레톤 채움
-        yield f"event: token\ndata: {json.dumps({'token': final_text + '\\n\\n'}, ensure_ascii=False)}\n\n"
+        newlines = '\n\n'
+        yield f"event: token\ndata: {json.dumps({'token': final_text + newlines}, ensure_ascii=False)}\n\n"
 
         # 3) TTS: gpt-4o-mini-tts로 음성 생성 (실패 시 무음)
         audio_b64 = ""

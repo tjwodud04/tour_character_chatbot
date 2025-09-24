@@ -1,6 +1,6 @@
 # data_service.py
 # 파이프라인: 질의 → LLM으로 지역/대분류(cat1) 1개씩 추출
-#          → areaCode2로 지역코드 해석 → areaBasedList2(대표이미지 보장 정렬)
+#          → areaCode/sigunguCode 고정(fast mapper) → areaBasedList2(대표이미지 보장 정렬)
 #          → cat1 필터 → 휴리스틱 클린 → 무작위 N개
 #          → detailCommon2로 overview/homepage 보강(+1문장 요약)
 #          → detailImage2 폴백 → 최종 카드 스키마 반환
@@ -9,7 +9,12 @@ import time, json, re, random, requests
 from typing import List, Dict, Tuple, Optional
 from urllib.parse import urlparse, unquote, quote
 from openai import OpenAI
+
 from scripts.config import *
+from scripts.regions import (
+    AREA_NAME_TO_CODE, SIGUNGU_BY_AREA,
+    fast_area_sigungu, strip_suffix
+)
 
 CAT1_CHOICES = [
     {"code": "A01", "name": "자연"},
@@ -24,17 +29,19 @@ CAT1_CHOICES = [
 _REGION_HINTS = [
     "서울","부산","대구","인천","광주","대전","울산","세종",
     "경기","강원","충북","충남","전북","전남","경북","경남",
-    "제주","강원특별자치도","제주특별자치도"
+    "제주","강원특별자치도","전북특별자치도","제주특별자치도"
 ]
 
-# 지역명 간단 정규화 테이블
+# 지역명 간단 정규화 테이블(광역 단위 위주)
 _NORMALIZE_REGION = {
     "제주도": "제주", "제주특별자치도": "제주",
     "서울특별시": "서울", "부산광역시": "부산", "대구광역시": "대구",
     "인천광역시": "인천", "광주광역시": "광주", "대전광역시": "대전",
     "울산광역시": "울산", "세종특별자치시": "세종",
-    "강원도": "강원", "경기도": "경기", "충청북도": "충북", "충청남도": "충남",
-    "전라북도": "전북", "전라남도": "전남", "경상북도": "경북", "경상남도": "경남",
+    "강원도": "강원", "강원특별자치도": "강원",
+    "경기도": "경기", "충청북도": "충북", "충청남도": "충남",
+    "전라북도": "전북", "전라남도": "전남",
+    "경상북도": "경북", "경상남도": "경남",
 }
 
 # ----------------------------- 유틸 -----------------------------
@@ -188,19 +195,17 @@ class DataService:
             cat_list = "\n".join([f"- {c['code']} : {c['name']}" for c in CAT1_CHOICES])
             prompt = f"""
 다음 한국어 요청에서
-1) 정확한 지역명 1개 (시/도/광역시/특별시 단위)
+1) 정확한 지역명 1개 (시/도/광역시/특별시 단위 또는 시/군 단위)
 2) 아래 목록 중 가장 가까운 대분류 cat1 코드 1개
 를 JSON으로만 출력하세요.
-
-지역명 예시: 제주(제주도), 서울(서울특별시), 부산(부산광역시), 강원(강원도), 경기(경기도)
 
 대분류 목록:
 {cat_list}
 
 출력 스키마:
-{{"region":"제주","cat1":"A01"}}
+{{"region":"경주","cat1":"A02"}}
 
-중요: 지역명은 시/도 단위로만 추출하세요. 구/군/시 단위는 제외하세요.
+중요: 가능하면 시/군 단위를 우선적으로 추출하되, 없으면 시/도 단위로 추출하세요.
 
 요청: {user_query}
 """.strip()
@@ -215,22 +220,23 @@ class DataService:
             )
             data = json.loads(resp.choices[0].message.content or "{}")
             region = (data.get("region") or "").strip()
+            # 광역 정규화(강원특별자치도→강원 등)
             region = _NORMALIZE_REGION.get(region, region)
             cat1   = (data.get("cat1") or "").strip().upper()
             if cat1 not in {c["code"] for c in CAT1_CHOICES}: cat1 = None
 
-            # 지역 힌트가 전혀 없으면 빈 문자열로 (전국 검색 방지)
+            # 지역 힌트가 전혀 없으면 키워드에 포함된 광역 키워드로 보완
             if not region:
                 t = (user_query or "").strip()
                 region = next((w for w in _REGION_HINTS if w in t), "")
-            print(f"[DEBUG] region='{region}', cat1='{cat1}'")
+            print(f"[DEBUG] 추출된 지역: '{region}', 카테고리: '{cat1}', 원본 쿼리: '{user_query}'")
             return region, cat1
         except Exception:
             t = (user_query or "").strip()
             region = next((w for w in _REGION_HINTS if w in t), "")
             return region, None
 
-    # --- 1-1) 지역명 → areaCode 해석 ---
+    # --- 1-1) 지역명 → areaCode 해석 (폴백 전용: 기존 TourAPI 기반) ---
     def _resolve_area_code(
         self, region_name: str, tour_api_key: str = None
         ) -> Tuple[Optional[str], Optional[str]]:
@@ -238,14 +244,14 @@ class DataService:
             return None, None
         url = f"{self.base_url}/areaCode2"
         p = {
-        "serviceKey": self._get_api_key(tour_api_key),  # ✅ 동일 키 주입
-        "numOfRows": 100, "pageNo": 1,
-        "MobileOS": "ETC", "MobileApp": "TourAPI", "_type": "json",
+            "serviceKey": self._get_api_key(tour_api_key),
+            "numOfRows": 100, "pageNo": 1,
+            "MobileOS": "ETC", "MobileApp": "TourAPI", "_type": "json",
         }
         try:
             r = requests.get(url, params=p, timeout=self.timeout); r.raise_for_status()
             items = self._safe_json(r).get("response",{}).get("body",{}).get("items",{}).get("item",[]) or []
-            name = (region_name or "").replace("특별자치도","").replace("광역시","").replace("특별시","").strip()
+            name = (region_name or "").replace("특별자치도","").replace("광역시","").replace("특별시","").replace("도","").strip()
 
             cand = [it for it in items if name and name in (it.get("name") or "")]
             if not cand:
@@ -272,13 +278,13 @@ class DataService:
 
         url = f"{self.base_url}/detailCommon2"
         params = {
-            "serviceKey": self._get_api_key(tour_api_key),  # << 동일 키 사용
+            "serviceKey": self._get_api_key(tour_api_key),
             "numOfRows": 1,
             "pageNo": 1,
             "MobileOS": "ETC",
             "MobileApp": "TourAPI",
             "_type": "json",
-            "contentId": content_id,  # v4.3: contentId만으로 공통정보 내려옴
+            "contentId": content_id,
         }
         try:
             r = requests.get(url, params=params, timeout=self.timeout)
@@ -293,7 +299,6 @@ class DataService:
 
             overview = (item.get("overview") or "").strip()
             homepage = _normalize_homepage(item.get("homepage") or "")
-            # 좌표는 문자열로 내려오므로 float 변환 시도
             mx = item.get("mapx")
             my = item.get("mapy")
             mapx = float(mx) if mx not in (None, "") else None
@@ -305,7 +310,7 @@ class DataService:
     def _fetch_detail_image(self, content_id: str, tour_api_key: str = None) -> str:
         url = f"{self.base_url}/detailImage2"
         p = {
-            "serviceKey": self._get_api_key(tour_api_key),  # << 동일 키 사용
+            "serviceKey": self._get_api_key(tour_api_key),
             "numOfRows": 1,
             "pageNo": 1,
             "MobileOS": "ETC",
@@ -336,7 +341,6 @@ class DataService:
 
     # --- 신규: 홈페이지/지도 폴백 링크 ---
     def _fallback_link(self, title: str, addr: str) -> dict:
-        """TourAPI homepage가 비었을 때 최소 검색/지도 링크 폴백."""
         q = (title or addr or "").strip()
         if not q:
             return {"homepage":"", "map_link":""}
@@ -376,7 +380,6 @@ class DataService:
             if not title: continue
             if re.search(r"(대리점|지점|점$|마트|백화점|면세점|아울렛|할인점|스토어)", title):
                 continue
-            # 전국 검색일 가능성(areacode 없음)엔 더 보수적으로 필터
             if not it.get("areacode"):
                 if re.search(r"(○○점|영업소|직영점|가맹점)", title):
                     continue
@@ -393,12 +396,10 @@ class DataService:
             if valid:
                 self._img_cache.set(cid_key, valid)
                 return valid
-        # 폴백: detailImage2
         img = self._fetch_detail_image(cid_key, tour_api_key=tour_api_key)
         if img:
             self._img_cache.set(cid_key, img)
         return img
-
 
     # --- 메인: 추천 아이템 ---
     def recommend_items(self, user_query: str, want: int = None, tour_api_key: str = None) -> List[Dict]:
@@ -406,17 +407,22 @@ class DataService:
 
         # (1) 지역/대분류
         region, cat1 = self._extract_region_and_cat1(user_query)
-        area_code, sigungu_code = self._resolve_area_code(region, tour_api_key=tour_api_key)
 
-        # 지역 해석 실패 시 키워드 기반 힌트
+        # (1-1) 고속 매핑: 시/군까지 즉시 고정
+        area_code, sigungu_code = fast_area_sigungu(region)
+
+        # (1-2) 실패 시 기존 해석 + 키워드 힌트 폴백
         if not area_code:
-            ac_hint, sg_hint = self._area_hint_from_keyword(user_query)
-            area_code = area_code or ac_hint
-            sigungu_code = sigungu_code or sg_hint
+            ac2, sg2 = self._resolve_area_code(region, tour_api_key=tour_api_key)
+            area_code = area_code or ac2
+            sigungu_code = sigungu_code or sg2
+            if not area_code:
+                ac_hint, sg_hint = self._area_hint_from_keyword(user_query)
+                area_code = area_code or ac_hint
+                sigungu_code = sigungu_code or sg_hint
 
         # (2) 지역기반 목록(areaBasedList2) + 대표이미지 보장 정렬
         url = f"{self.base_url}/areaBasedList2"
-        # 이미지/품질 필터로 탈락분 고려해 넉넉히 가져옴
         num_rows = max(80, want * API_FETCH_MULTIPLIER)
         params = {
             "serviceKey": self._get_api_key(tour_api_key),
@@ -447,7 +453,15 @@ class DataService:
             print("[TourAPI] areaBasedList2 호출 오류:", e)
             items = []
 
+        # (2-1) 휴리스틱 정리
         items = self._clean_items(items)
+
+        # (2-2) 최종 방어 필터(타 지역 누출 차단)
+        if area_code:
+            items = [it for it in items if str(it.get("areacode") or "").strip() == str(area_code)]
+        if sigungu_code:
+            items = [it for it in items if str(it.get("sigungucode") or it.get("sigunguCode") or "").strip() == str(sigungu_code)]
+
         if not items:
             return []
 
@@ -459,7 +473,6 @@ class DataService:
             title = (it.get("title") or "").replace("<b>", "").replace("</b>", "").strip()
             addr = _compose_full_address((it.get("addr1") or ""), (it.get("addr2") or ""))
 
-            # ✅ 같은 키로 detailCommon 호출
             overview, homepage, mapx, mapy = self._fetch_detail_common(cid, tour_api_key=tour_api_key)
 
             reason = self._summarize_one_line(overview) or (
@@ -470,10 +483,9 @@ class DataService:
                 cid,
                 _to_https((it.get("firstimage2") or "")),
                 _to_https((it.get("firstimage") or "")),
-                tour_api_key=tour_api_key,  # << 폴백 호출에도 동일 키
+                tour_api_key=tour_api_key,
             )
 
-            # 지도 링크(예: Google Maps). mapy=위도(lat), mapx=경도(lng)
             map_url = ""
             if mapx is not None and mapy is not None:
                 map_url = f"https://maps.google.com/?q={mapy},{mapx}"
@@ -483,8 +495,8 @@ class DataService:
                 "reason": reason or "한 줄 설명 없음",
                 "address": addr or "주소 정보 없음",
                 "image_url": img,
-                "homepage": homepage,   # << TourAPI에서 받은 홈페이지 URL
-                "map_url": map_url,     # << 좌표로 생성한 지도 링크
+                "homepage": homepage,
+                "map_url": map_url,
                 "metadata": {
                     "contentid": cid,
                     "cat1": (it.get("cat1") or ""),
@@ -494,6 +506,8 @@ class DataService:
                     "region": region,
                     "mapx": mapx,
                     "mapy": mapy,
+                    "areacode": it.get("areacode"),
+                    "sigungucode": it.get("sigungucode") or it.get("sigunguCode"),
                 }
             })
 

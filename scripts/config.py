@@ -41,11 +41,11 @@ IMAGE_DENY_DOMAINS = {"example.com", "localhost", "127.0.0.1"}
 IMAGE_REQUIRE_HEAD_OK = True
 IMAGE_HEAD_WHITELIST_NOHEAD = {"tong.visitkorea.or.kr"}
 
-# 임베딩 캐시 설정 (Redis)
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-CACHE_SIM_THRESHOLD = 0.82
-MAX_CACHE_ITEMS = 500
-CACHE_TTL_SECONDS = 7 * 24 * 3600  # 7일
+# 임베딩 캐시 설정 (Redis 제거됨)
+# REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+# CACHE_SIM_THRESHOLD = 0.82
+# MAX_CACHE_ITEMS = 500
+# CACHE_TTL_SECONDS = 7 * 24 * 3600  # 7일
 
 CHARACTER_SYSTEM_PROMPTS = {
     "kei": "당신은 친근하고 창의적인 한국 관광 가이드입니다. 사용자의 여행 취향과 관심사를 파악해서 적절한 관광지를 추천해주세요. 따뜻하고 친근한 톤으로 관광지의 매력을 설명해주세요.",
