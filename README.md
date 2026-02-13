@@ -2,8 +2,13 @@
 
 [🇰🇷 한국어](#-한국어) | [🇺🇸 English](#-english)
 
-UI :
-<img width="1805" height="827" alt="image" src="https://github.com/user-attachments/assets/9f8491a3-28ec-405f-966b-bfbc74ffe49c" />
+Intro Video: 
+
+
+
+https://github.com/user-attachments/assets/d8a38dda-6076-4ff1-8e53-be846d26a57d
+
+
 
 ---
 
