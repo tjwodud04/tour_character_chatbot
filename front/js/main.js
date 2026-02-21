@@ -27,18 +27,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const openaiKeyInput = document.getElementById('openaiKeyInput');
     const tourKeyInput = document.getElementById('tourKeyInput');
 
-    // API 키 저장/불러오기 함수들
+    // 세션 메모리에만 API 키 보관 (페이지 새로고침 시 초기화 — localStorage보다 안전)
+    window._sessionApiKeys = { openai: null, tour: null };
+
     function getSavedOpenAIKey() {
-        return localStorage.getItem('openai_api_key');
+        return window._sessionApiKeys.openai;
     }
     function getSavedTourKey() {
-        return localStorage.getItem('tour_api_key');
+        return window._sessionApiKeys.tour;
     }
     function setSavedOpenAIKey(key) {
-        localStorage.setItem('openai_api_key', key);
+        window._sessionApiKeys.openai = key;
     }
     function setSavedTourKey(key) {
-        localStorage.setItem('tour_api_key', key);
+        window._sessionApiKeys.tour = key;
     }
 
     let savedOpenAIKey = getSavedOpenAIKey();

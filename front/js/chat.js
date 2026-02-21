@@ -114,7 +114,7 @@ class ChatManager{
   }
   async sendAudioToServer(blob){
     const form=new FormData(); form.append('audio',blob,'audio.webm'); form.append('character',this.characterType);
-    const openaiKey=localStorage.getItem('openai_api_key')||''; const tourKey=localStorage.getItem('tour_api_key')||'';
+    const openaiKey=window._sessionApiKeys?.openai||''; const tourKey=window._sessionApiKeys?.tour||'';
     const res=await fetch('/scripts/chat',{method:'POST',body:form,headers:{'X-API-KEY':openaiKey,'X-TOUR-API-KEY':tourKey}});
     if(!res.ok) throw new Error(await res.text()); return await res.json();
   }
@@ -249,7 +249,7 @@ async function handleRecording(){
 
                 try {
                   // 서버가 gpt-4o-mini-tts로 음성을 생성할 수 있도록 API 키 전달
-                  const openaiKey = localStorage.getItem('openai_api_key') || '';
+                  const openaiKey = window._sessionApiKeys?.openai || '';
                   const regionQ = encodeURIComponent(lastRegion || '');
                   const res = await fetch(`/scripts/courses?region=${regionQ}&n=3&character=${encodeURIComponent(chatManager.characterType)}`, {
                     headers: { 'X-API-KEY': openaiKey }
@@ -313,8 +313,8 @@ async function handleRecording(){
 
 // ====== 스트리밍 송수신: /scripts/chat_stream ======
 async function sendAudioToServerStream(audioBlob, characterType='kei'){
-  const openaiKey=localStorage.getItem('openai_api_key')||'';
-  const tourKey=localStorage.getItem('tour_api_key')||'';
+  const openaiKey=window._sessionApiKeys?.openai||'';
+  const tourKey=window._sessionApiKeys?.tour||'';
   const formData=new FormData();
   formData.append('audio', audioBlob, 'audio.webm');
   formData.append('character', characterType);
