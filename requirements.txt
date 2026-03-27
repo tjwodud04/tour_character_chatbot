@@ -6,7 +6,7 @@ flask-cors==6.0.0
 openai==1.84.0
 
 # HTTP requests
-requests==2.32.3
+requests==2.33.0
 
 # Audio processing
 pydub==0.25.1
