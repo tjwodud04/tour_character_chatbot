@@ -1,40 +1,38 @@
-# search_service.py
-# 질의 → 임베딩 → DataService 호출 (캐시 없음)
-from typing import List, Dict, Optional
-from scripts.config import *
+"""질의 → (질의 임베딩) → DataService 조회로 관광지 카드를 얻는 서비스.
+
+현재는 벡터 캐시/재랭킹이 없어 실제 순위는 `DataService`가 결정한다. 질의 임베딩은
+동일 키 검증과 향후 의미 기반 랭킹 확장을 위한 자리로 유지한다(동작 보존).
+"""
+
+from typing import List, Optional
+
+from scripts.config import NUM_RECOMMEND
 from scripts.data_service import DataService
 from scripts.embedding_service import EmbeddingService
-import json, math, hashlib
+from scripts.schemas import TourCard
 
-def _cos_sim(a: list[float], b: list[float]) -> float:
-    """코사인 유사도 (0-division 방지 포함)"""
-    dot = sum(x*y for x, y in zip(a, b))
-    na = math.sqrt(sum(x*x for x in a)) or 1e-9
-    nb = math.sqrt(sum(y*y for y in b)) or 1e-9
-    return dot / (na * nb)
 
 class SearchService:
-    """직접 DataService 조회 (캐시 없음)"""
+    """DataService를 직접 조회한다(별도 벡터 캐시 없음)."""
+
     def __init__(self, openai_api_key: Optional[str] = None):
         self.openai_api_key = (openai_api_key or "").strip()
-        # EmbeddingService에 키를 주입
+        # EmbeddingService에 키를 주입 (키 유효성도 함께 검증됨)
         self.embedder = EmbeddingService(api_key=self.openai_api_key)
 
     def search(
         self,
         query: str,
-        top_k: int = None,
-        tour_api_key: str = None,
+        top_k: Optional[int] = None,
+        tour_api_key: Optional[str] = None,
         openai_api_key: Optional[str] = None,
-    ) -> List[Dict]:
+    ) -> List[TourCard]:
         want = top_k or NUM_RECOMMEND
 
-        # 1) 임베딩 벡터 생성 (캐시 없음)
-        qv = self.embedder.embed([query])[0]
+        # 1) 질의 임베딩 생성 (현 단계에선 랭킹에 직접 쓰이지 않음)
+        self.embedder.embed([query])
 
-        # 2) 직접 API 조회
+        # 2) DataService로 직접 조회
         api_key = (openai_api_key or self.openai_api_key or "").strip()
         data_svc = DataService(openai_api_key=api_key)
-        cards = data_svc.recommend_items(query, want=want, tour_api_key=tour_api_key)
-
-        return cards
+        return data_svc.recommend_items(query, want=want, tour_api_key=tour_api_key)
